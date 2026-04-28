@@ -1,0 +1,32 @@
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--card-accent, var(--accent));
+  border-radius: 6px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.label {
+  font-family: Verdana, sans-serif;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.value {
+  font-family: Verdana, sans-serif;
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+}
+
+.sub {
+  font-family: Verdana, sans-serif;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}

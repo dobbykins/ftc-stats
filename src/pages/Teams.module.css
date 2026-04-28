@@ -1,0 +1,77 @@
+.page { max-width: 800px; margin: 0 auto; padding: 2.5rem 2rem; }
+
+.title {
+  font-family: Verdana, sans-serif;
+  font-size: 2.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 2rem;
+}
+
+.searchRow { display: flex; gap: 0.75rem; margin-bottom: 2rem; }
+
+.input {
+  flex: 1;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  color: var(--text);
+  font-family: Verdana, sans-serif;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.input:focus { border-color: var(--accent); }
+.input::placeholder { color: var(--text-muted); }
+
+.btn {
+  font-family: Verdana, sans-serif;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.75rem 1.5rem;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 6px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn:hover { opacity: 0.85; }
+
+.profile { animation: fadeIn 0.2s ease; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.profileHeader { margin-bottom: 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+
+.teamNum { font-family: Verdana, sans-serif; font-size: 0.75rem; color: var(--accent); letter-spacing: 0.1em; margin-bottom: 0.25rem; }
+.teamName { font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.4rem; }
+.teamMeta { font-family: Verdana, sans-serif; font-size: 0.75rem; color: var(--text-muted); }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.chartSection {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+}
+
+.chartLabel { font-family: Verdana, sans-serif; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 1rem; }
+.chartNote { font-family: Verdana, sans-serif; font-size: 0.7rem; color: var(--text-muted); margin-top: 0.75rem; }
+
+.state { padding: 3rem; text-align: center; color: var(--text-muted); font-family: Verdana, sans-serif; font-size: 0.8rem; }
+.error { color: var(--red); font-family: Verdana, sans-serif; font-size: 0.8rem; padding: 1rem; }
