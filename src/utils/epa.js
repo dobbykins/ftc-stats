@@ -427,7 +427,7 @@ export function epaWinProb(redTeams, blueTeams, state) {
   const scale = Math.max(eloScale || seasonAvg * ELO_SCALE_MULTIPLIER, 1);
   const d = bSum - rSum;
   // index.html uses: 1 / (1 + 10^(d / eloScale))  with clamp [0.00, 0.97]
-  return Math.max(0.00, Math.min(1.00, 1 / (1 + Math.pow(10, d / 400))));
+  return Math.max(0.00, Math.min(1.00, 1 / (1 + Math.pow(10, d / 200))));
 }
 
 // ── Season accuracy ────────────────────────────────────────
