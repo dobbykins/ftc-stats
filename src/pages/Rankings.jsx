@@ -4,9 +4,9 @@ import { getStats, epaWinProb, uepaLabel, mean, toU } from '../utils/epa'
 import styles from './Rankings.module.css'
 
 const TIER_COLORS = {
-  '99%+':     '#fbbf24', '79%-70%':    '#a78bfa',
-  '99%-90%': '#3b82f6', '69%-60%':   '#22c55e',
-  '89%-80%': '#fb923c', '>59%':'#6b7280',
+  '99-100':     '#fbbf24', '79-70':    '#a78bfa',
+  '90-90': '#3b82f6', '69-60':   '#22c55e',
+  '89-80': '#fb923c', '59-0':'#6b7280',
 }
 
 export default function Rankings({ epa }) {
