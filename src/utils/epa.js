@@ -5,7 +5,7 @@
 // K-factor resets to K_FLOOR at the start of each new tournament (mcEvent resets to 0).
 const K_RAMP_START  = 2;
 const K_RAMP_END    = 4;
-const K_PEAK_VAL    = 0.75;
+const K_PEAK_VAL    = 0.65;
 const K_PLATEAU_END = 5;
 const K_FLOOR       = 0.45;
 
