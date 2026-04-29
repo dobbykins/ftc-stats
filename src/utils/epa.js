@@ -244,8 +244,8 @@ export function buildEpa(rows, priorRatings = {}) {
       const t = red[i];
       recentMatchScores[t].push(rShare);
       if (recentMatchScores[t].length > MOMENTUM_WINDOW) recentMatchScores[t].shift();
-      dcR[t] = (dcR[t] ?? 0) + k * ((rShare - rAutoShares[i]) - (dcR[t] ?? initEpa(t) * DC_PRIOR_FRAC));
       const k = kFactor(mcEvent[t] || 0);
+      dcR[t] = (dcR[t] ?? 0) + k * ((rShare - rAutoShares[i]) - (dcR[t] ?? initEpa(t) * DC_PRIOR_FRAC));
       const myAutoEpa_r = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (rAutoShares[i] - myAutoEpa_r), ratings[t]);
       autoHistory[t].push(rAutoShares[i]);
@@ -257,8 +257,8 @@ export function buildEpa(rows, priorRatings = {}) {
       const t = blue[i];
       recentMatchScores[t].push(bShare);
       if (recentMatchScores[t].length > MOMENTUM_WINDOW) recentMatchScores[t].shift();
-      dcR[t] = (dcR[t] ?? 0) + k * ((bShare - bAutoShares[i]) - (dcR[t] ?? initEpa(t) * DC_PRIOR_FRAC));
       const k = kFactor(mcEvent[t] || 0);
+      dcR[t] = (dcR[t] ?? 0) + k * ((bShare - bAutoShares[i]) - (dcR[t] ?? initEpa(t) * DC_PRIOR_FRAC));
       const myAutoEpa_r = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (bAutoShares[i] - myAutoEpa_r), ratings[t]);
       autoHistory[t].push(bAutoShares[i]);
