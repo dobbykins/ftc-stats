@@ -9,6 +9,10 @@ const K_PEAK_VAL    = 0.57;
 const K_PLATEAU_END = 5;
 const K_FLOOR       = 0.38;
 
+const AUTO_PRIOR_FRAC    = 0.12;
+const PATTERN_PRIOR_FRAC = 0.12;
+const PARK_PRIOR_FRAC    = 0.05;
+
 const REGION_EARLY_EVENTS  = 4;
 const REGION_FALLBACK_FRAC = 0.92;
 const GLOBAL_FALLBACK_FRAC = 0.88;
