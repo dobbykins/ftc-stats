@@ -1,16 +1,15 @@
 // ═══════════════════════════════════════════════════════════
-// EPA ENGINE — ported from index.html (Statbotics methodology)
+// EPA ENGINE — matched exactly to index.html
 // ═══════════════════════════════════════════════════════════
 
-// K-factor shape
-const K_RAMP_START   = 0;
-const K_RAMP_END     = 3;
-const K_PEAK_VAL     = 0.65;
-const K_PLATEAU_END  = 5;
-const K_FLOOR        = 0.45;
+// K-factor resets to K_FLOOR at the start of each new tournament (mcEvent resets to 0).
+const K_RAMP_START  = 0;
+const K_RAMP_END    = 3;
+const K_PEAK_VAL    = 0.75;
+const K_PLATEAU_END = 5;
+const K_FLOOR       = 0.25;
 
-const AUTO_PRIOR_FRAC    = 0.22;
-const DC_PRIOR_FRAC      = 0.78;
+const AUTO_PRIOR_FRAC    = 0.12;
 const PATTERN_PRIOR_FRAC = 0.12;
 const PARK_PRIOR_FRAC    = 0.05;
 
@@ -24,9 +23,11 @@ const AUTO_STABILITY_FLOOR  = 0.60;
 
 const MOMENTUM_WINDOW   = 6;
 const MOMENTUM_WEIGHT   = 0.35;
-const ELO_SCALE_MULTIPLIER = 1.8;
-const MIN_MATCHES_FOR_PRED = 3;
-const EPA_TRUST_RAMP_END   = 8;
+const ELO_SCALE_MULTIPLIER = 1.0;
+
+// Min matches for prediction — 0 means use all data even from first match
+const MIN_MATCHES_FOR_PRED = 0;
+const EPA_TRUST_RAMP_END   = 0;
 
 // ── Math helpers ──────────────────────────────────────────
 export const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
@@ -39,6 +40,9 @@ export function kFactor(n) {
   if (n <= K_PLATEAU_END) return K_PEAK_VAL;
   return Math.max(K_FLOOR, K_PEAK_VAL - ((K_PEAK_VAL - K_FLOOR) / 30) * (n - K_PLATEAU_END));
 }
+
+// m=0: EPA is pure score decomposition — opponent quality does not affect EPA
+function mFactor() { return 0; }
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
   return k * (1 / (1 + m)) * ((scoreShare - myEpa) - m * (oppShare - oppEpa));
@@ -76,11 +80,12 @@ function buildRegionalPriors(rows) {
   const eventRegion = {}, eventFirstTime = {};
   for (const r of rows) {
     const ev = (r.event || '').toUpperCase();
-    if (!ev || ev === 'LIVE') continue;
+    if (!ev || ev === 'LIVE' || ev === 'DIRECT') continue;
     if (!eventRegion[ev]) eventRegion[ev] = extractRegion(ev);
     const t = r.mt || '';
     if (t && (!eventFirstTime[ev] || t < eventFirstTime[ev])) eventFirstTime[ev] = t;
   }
+
   const regionEvents = {};
   for (const [ev, region] of Object.entries(eventRegion)) {
     if (region === 'CMP') continue;
@@ -90,6 +95,7 @@ function buildRegionalPriors(rows) {
   for (const region of Object.keys(regionEvents)) {
     regionEvents[region].sort((a, b) => (eventFirstTime[a] || 'z').localeCompare(eventFirstTime[b] || 'z'));
   }
+
   const regionEarlyAvg = {};
   for (const [region, events] of Object.entries(regionEvents)) {
     const earlyEvents = new Set(events.slice(0, REGION_EARLY_EVENTS));
@@ -97,11 +103,14 @@ function buildRegionalPriors(rows) {
     for (const r of rows) {
       const ev = (r.event || '').toUpperCase();
       if (!earlyEvents.has(ev)) continue;
-      if (r.rt?.length) perRobot.push(r.rs / r.rt.length);
-      if (r.bt?.length) perRobot.push(r.bs / r.bt.length);
+      // Only qual matches for regional prior
+      if ((r.level || 'qual') !== 'qual' && r.level !== '' && r.level !== 'qualification') continue;
+      if (r.rt && r.rt.length) perRobot.push(r.rs / r.rt.length);
+      if (r.bt && r.bt.length) perRobot.push(r.bs / r.bt.length);
     }
     if (perRobot.length >= 4) regionEarlyAvg[region] = mean(perRobot);
   }
+
   const teamFirstEvent = {}, teamFirstTime = {};
   for (const r of rows) {
     const ev = (r.event || '').toUpperCase();
@@ -114,8 +123,10 @@ function buildRegionalPriors(rows) {
       }
     }
   }
+
   const teamRegion = {};
   for (const [team, ev] of Object.entries(teamFirstEvent)) teamRegion[team] = extractRegion(ev);
+
   return { regionEarlyAvg, teamRegion };
 }
 
@@ -127,6 +138,19 @@ function shrinkEpa(epa, matchCount, fallback) {
   return trust * epa + (1 - trust) * fallback;
 }
 
+function shrunkEpaMap(snap, mcSnap, seasonAvg, teamRegion, regionEarlyAvg) {
+  const out = {};
+  for (const [t, epa] of Object.entries(snap)) {
+    const n = mcSnap[t] || 0;
+    const region = teamRegion[+t];
+    const fb = (region && regionEarlyAvg[region])
+      ? regionEarlyAvg[region] * REGION_FALLBACK_FRAC
+      : seasonAvg * GLOBAL_FALLBACK_FRAC;
+    out[t] = shrinkEpa(epa, n, fb);
+  }
+  return out;
+}
+
 // ── Main EPA build ─────────────────────────────────────────
 export function buildEpa(rows, priorRatings = {}) {
   const ratings = {}, autoR = {}, dcR = {}, mc = {};
@@ -134,6 +158,7 @@ export function buildEpa(rows, priorRatings = {}) {
   const autoHistory = {};
   const recentMatchScores = {};
   const opponentHistory = {};
+  const chronoSnapshots = [];
 
   const perRobot = [];
   for (const r of rows) {
@@ -142,6 +167,7 @@ export function buildEpa(rows, priorRatings = {}) {
   }
   const seasonAvg = perRobot.length ? mean(perRobot) : 30;
 
+  // Calibrate Elo scale from penalty-free score margins (65th percentile)
   const margins = [];
   for (const r of rows) {
     if (r.rs !== undefined && r.bs !== undefined && r.rs !== r.bs)
@@ -164,7 +190,8 @@ export function buildEpa(rows, priorRatings = {}) {
       ? regionEarlyAvg[region] * REGION_FALLBACK_FRAC
       : seasonAvg * GLOBAL_FALLBACK_FRAC;
     if (isCareer && careerPrior?.[team] !== undefined) {
-      return PRIOR_SEASON_WEIGHT * (careerPrior[team] * seasonAvg) + (1 - PRIOR_SEASON_WEIGHT) * regionalPrior;
+      const scaledPrior = careerPrior[team] * seasonAvg;
+      return PRIOR_SEASON_WEIGHT * scaledPrior + (1 - PRIOR_SEASON_WEIGHT) * regionalPrior;
     }
     if (!isCareer) {
       const priorRaw = priorRatings[team];
@@ -180,15 +207,18 @@ export function buildEpa(rows, priorRatings = {}) {
   for (const r of rows) [...(r.rt || []), ...(r.bt || [])].forEach(t => allTeams.add(t));
   for (const t of allTeams) {
     const init = initEpa(t);
-    ratings[t] = init; autoR[t] = init * AUTO_PRIOR_FRAC;
-    dcR[t] = init * DC_PRIOR_FRAC; patR[t] = init * PATTERN_PRIOR_FRAC;
-    parkR[t] = init * PARK_PRIOR_FRAC; mc[t] = 0;
-    autoHistory[t] = []; recentMatchScores[t] = []; opponentHistory[t] = [];
+    ratings[t] = init;
+    autoR[t]   = init * AUTO_PRIOR_FRAC;
+    patR[t]    = init * PATTERN_PRIOR_FRAC;
+    parkR[t]   = init * PARK_PRIOR_FRAC;
+    mc[t]      = 0;
+    autoHistory[t]       = [];
+    recentMatchScores[t] = [];
+    opponentHistory[t]   = [];
   }
 
   const mcEvent = {}, teamCurEvent = {};
   const preEventEpas = {}, seenAtEvent = new Set();
-  const chronoSnapshots = [];
 
   const sorted = [...rows].sort((a, b) => (a.mt || '').localeCompare(b.mt || ''));
 
@@ -210,7 +240,10 @@ export function buildEpa(rows, priorRatings = {}) {
 
     if (row.rtot !== undefined && row.rtot !== null && row.rtot !== row.btot) {
       const snap = {}, mcSnap = {};
-      for (const t of [...red, ...blue]) { snap[t] = ratings[t] ?? initEpa(t); mcSnap[t] = mc[t] || 0; }
+      for (const t of [...red, ...blue]) {
+        snap[t]   = ratings[t] ?? initEpa(t);
+        mcSnap[t] = mc[t] || 0;
+      }
       chronoSnapshots.push({ row, snap, mcSnap });
     }
 
@@ -220,66 +253,117 @@ export function buildEpa(rows, priorRatings = {}) {
     }
 
     const nr = 2, nb = 2;
-    const rShare = row.rs / nr, bShare = row.bs / nb;
+    const rShare = row.rs / nr;
+    const bShare = row.bs / nb;
+
     const rAutoShares = red.map(() => (row.ra || 0) / nr);
     const bAutoShares = blue.map(() => (row.ba || 0) / nb);
-    const rPatShare = (row.rPatPts ?? 0) / nr, bPatShare = (row.bPatPts ?? 0) / nb;
-    const rParkShare = (row.rParkPts ?? 0) / nr, bParkShare = (row.bParkPts ?? 0) / nb;
-    const rEA = mean(red.map(t => ratings[t] ?? initEpa(t)));
+
+    const rPatShare  = (row.rPatPts  ?? 0) / nr;
+    const bPatShare  = (row.bPatPts  ?? 0) / nb;
+    const rParkShare = (row.rParkPts ?? 0) / nr;
+    const bParkShare = (row.bParkPts ?? 0) / nb;
+
+    const rEA = mean(red.map(t => ratings[t]  ?? initEpa(t)));
     const bEA = mean(blue.map(t => ratings[t] ?? initEpa(t)));
+    const m   = mFactor();
 
-    for (const t of red) opponentHistory[t].push(mean(blue.map(tt => ratings[tt] ?? initEpa(tt))));
-    for (const t of blue) opponentHistory[t].push(mean(red.map(tt => ratings[tt] ?? initEpa(tt))));
+    // Record opponent schedule strength BEFORE updating EPAs
+    for (const t of red) {
+      opponentHistory[t].push(mean(blue.map(tt => ratings[tt] ?? initEpa(tt))));
+    }
+    for (const t of blue) {
+      opponentHistory[t].push(mean(red.map(tt => ratings[tt] ?? initEpa(tt))));
+    }
 
+    // Main EPA updates
     for (const t of red) {
       const k = kFactor(mcEvent[t] || 0);
-      ratings[t] = (ratings[t] ?? initEpa(t)) + epaUpdate(k, 0, rShare, ratings[t] ?? initEpa(t), bShare, bEA);
+      const myEpa = ratings[t] ?? initEpa(t);
+      ratings[t] = myEpa + epaUpdate(k, m, rShare, myEpa, bShare, bEA);
     }
     for (const t of blue) {
       const k = kFactor(mcEvent[t] || 0);
-      ratings[t] = (ratings[t] ?? initEpa(t)) + epaUpdate(k, 0, bShare, ratings[t] ?? initEpa(t), rShare, rEA);
+      const myEpa = ratings[t] ?? initEpa(t);
+      ratings[t] = myEpa + epaUpdate(k, m, bShare, myEpa, rShare, rEA);
     }
 
+    // Track recent scores for momentum EPA
     for (let i = 0; i < red.length; i++) {
       const t = red[i];
       recentMatchScores[t].push(rShare);
       if (recentMatchScores[t].length > MOMENTUM_WINDOW) recentMatchScores[t].shift();
-      const k = kFactor(mcEvent[t] || 0);
-      dcR[t] = (dcR[t] ?? 0) + k * ((rShare - rAutoShares[i]) - (dcR[t] ?? initEpa(t) * DC_PRIOR_FRAC));
-      const myAutoEpa_r = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
-      autoR[t] = Math.min((autoR[t] ?? 0) + k * (rAutoShares[i] - myAutoEpa_r), ratings[t]);
-      autoHistory[t].push(rAutoShares[i]);
-      if (autoHistory[t].length > AUTO_STABILITY_WINDOW) autoHistory[t].shift();
-      if (rPatShare > 0 || row.rPatPts !== undefined) patR[t] = Math.max(0, (patR[t] ?? 0) + k * (rPatShare - (patR[t] ?? 0)));
-      if (rParkShare > 0 || row.rParkPts !== undefined) parkR[t] = Math.max(0, (parkR[t] ?? 0) + k * (rParkShare - (parkR[t] ?? 0)));
     }
     for (let i = 0; i < blue.length; i++) {
       const t = blue[i];
       recentMatchScores[t].push(bShare);
       if (recentMatchScores[t].length > MOMENTUM_WINDOW) recentMatchScores[t].shift();
-      const k = kFactor(mcEvent[t] || 0);
-      dcR[t] = (dcR[t] ?? 0) + k * ((bShare - bAutoShares[i]) - (dcR[t] ?? initEpa(t) * DC_PRIOR_FRAC));
-      const myAutoEpa_r = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
-      autoR[t] = Math.min((autoR[t] ?? 0) + k * (bAutoShares[i] - myAutoEpa_r), ratings[t]);
-      autoHistory[t].push(bAutoShares[i]);
-      if (autoHistory[t].length > AUTO_STABILITY_WINDOW) autoHistory[t].shift();
-      if (bPatShare > 0 || row.bPatPts !== undefined) patR[t] = Math.max(0, (patR[t] ?? 0) + k * (bPatShare - (patR[t] ?? 0)));
-      if (bParkShare > 0 || row.bParkPts !== undefined) parkR[t] = Math.max(0, (parkR[t] ?? 0) + k * (bParkShare - (parkR[t] ?? 0)));
     }
 
-    for (const t of [...red, ...blue]) { mc[t] = (mc[t] || 0) + 1; mcEvent[t] = (mcEvent[t] || 0) + 1; }
+    // Auto sub-EPA updates
+    for (let i = 0; i < red.length; i++) {
+      const t = red[i];
+      const k = kFactor(mcEvent[t] || 0);
+      const aShare = rAutoShares[i];
+      const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
+      const d = k * (aShare - myAutoEpa);
+      autoR[t] = Math.min((autoR[t] ?? 0) + d, ratings[t]);
+      autoHistory[t].push(aShare);
+      if (autoHistory[t].length > AUTO_STABILITY_WINDOW) autoHistory[t].shift();
+    }
+    for (let i = 0; i < blue.length; i++) {
+      const t = blue[i];
+      const k = kFactor(mcEvent[t] || 0);
+      const aShare = bAutoShares[i];
+      const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
+      const d = k * (aShare - myAutoEpa);
+      autoR[t] = Math.min((autoR[t] ?? 0) + d, ratings[t]);
+      autoHistory[t].push(aShare);
+      if (autoHistory[t].length > AUTO_STABILITY_WINDOW) autoHistory[t].shift();
+    }
+
+    // Pattern / park sub-EPA updates
+    for (const t of red) {
+      const k = kFactor(mcEvent[t] || 0);
+      if (rPatShare > 0 || row.rPatPts !== undefined)
+        patR[t] = Math.max(0, (patR[t] ?? 0) + k * (rPatShare - (patR[t] ?? 0)));
+      if (rParkShare > 0 || row.rParkPts !== undefined)
+        parkR[t] = Math.max(0, (parkR[t] ?? 0) + k * (rParkShare - (parkR[t] ?? 0)));
+    }
+    for (const t of blue) {
+      const k = kFactor(mcEvent[t] || 0);
+      if (bPatShare > 0 || row.bPatPts !== undefined)
+        patR[t] = Math.max(0, (patR[t] ?? 0) + k * (bPatShare - (patR[t] ?? 0)));
+      if (bParkShare > 0 || row.bParkPts !== undefined)
+        parkR[t] = Math.max(0, (parkR[t] ?? 0) + k * (bParkShare - (parkR[t] ?? 0)));
+    }
+
+    // dcR is derived, not independently updated: total minus auto
+    for (const t of [...red, ...blue]) {
+      dcR[t]     = (ratings[t] || 0) - (autoR[t] || 0);
+      mc[t]      = (mc[t] || 0) + 1;
+      mcEvent[t] = (mcEvent[t] || 0) + 1;
+    }
   }
 
+  // Compute momentum EPA (weighted mean of last MOMENTUM_WINDOW scores)
   const momentumEpa = {};
   for (const t of allTeams) {
     const recent = recentMatchScores[t] || [];
     if (recent.length >= 2) {
-      let ws = 0, wt = 0;
-      for (let i = 0; i < recent.length; i++) { const w = i + 1; ws += recent[i] * w; wt += w; }
-      momentumEpa[t] = wt > 0 ? ws / wt : ratings[t];
-    } else { momentumEpa[t] = ratings[t]; }
+      let weightedSum = 0, weightTotal = 0;
+      for (let i = 0; i < recent.length; i++) {
+        const w = i + 1;
+        weightedSum += recent[i] * w;
+        weightTotal += w;
+      }
+      momentumEpa[t] = weightTotal > 0 ? weightedSum / weightTotal : ratings[t];
+    } else {
+      momentumEpa[t] = ratings[t];
+    }
   }
 
+  // Compute schedule strength per team
   const scheduleStrength = {};
   for (const t of allTeams) {
     const hist = opponentHistory[t] || [];
@@ -305,32 +389,45 @@ export function buildEpa(rows, priorRatings = {}) {
 }
 
 // ── Win probability ────────────────────────────────────────
+// Matches index.html epaWinProb exactly:
+// - momentum-blended prediction EPA
+// - auto stability correction
+// - calibrated Elo scale (score margin distribution)
+// - NO shrinkage (MIN_MATCHES_FOR_PRED = 0, EPA_TRUST_RAMP_END = 0)
 export function epaWinProb(redTeams, blueTeams, state) {
-  const { ratings, momentumEpa, matchCounts, autoRatings, autoStability, seasonAvg, eloScale } = state;
+  const { ratings, momentumEpa, matchCounts, autoRatings, autoStability,
+          seasonAvg, eloScale, regionEarlyAvg, teamRegion } = state;
 
-  const predEpa = (t) => {
-    const raw = ratings[t] ?? seasonAvg * GLOBAL_FALLBACK_FRAC;
-    const mom = momentumEpa?.[t];
-    if (mom !== undefined && (matchCounts?.[t] ?? 0) >= MOMENTUM_WINDOW)
-      return raw * (1 - MOMENTUM_WEIGHT) + mom * MOMENTUM_WEIGHT;
-    return raw;
+  const regionalFallback = (team) => {
+    const region = teamRegion[team];
+    if (region && regionEarlyAvg[region]) return regionEarlyAvg[region] * REGION_FALLBACK_FRAC;
+    return seasonAvg * GLOBAL_FALLBACK_FRAC;
+  };
+
+  const predictionEpa = (t) => {
+    const rawEpa = ratings[t] ?? regionalFallback(t);
+    const momEpa = momentumEpa?.[t];
+    if (momEpa !== undefined && (matchCounts?.[t] ?? 0) >= MOMENTUM_WINDOW)
+      return rawEpa * (1 - MOMENTUM_WEIGHT) + momEpa * MOMENTUM_WEIGHT;
+    return rawEpa;
   };
 
   const teamScore = (t) => {
-    const n = matchCounts?.[t] ?? 0;
-    const fb = seasonAvg * GLOBAL_FALLBACK_FRAC;
-    let epa = shrinkEpa(Math.max(0, predEpa(t)), n, fb);
+    let epa = Math.max(0, predictionEpa(t));
     const aepa = autoRatings?.[t] ?? epa * AUTO_PRIOR_FRAC;
-    const stab = autoStability?.[t] ?? 1.0;
-    const effectiveAuto = aepa * stab + (epa * AUTO_PRIOR_FRAC) * (1 - stab);
-    return Math.max(0, effectiveAuto + Math.max(0, epa - aepa));
+    const stability = autoStability?.[t] ?? 1.0;
+    const effectiveAuto = aepa * stability + (epa * AUTO_PRIOR_FRAC) * (1 - stability);
+    const dcEpa = Math.max(0, epa - aepa);
+    return Math.max(0, effectiveAuto + dcEpa);
   };
 
   const rSum = redTeams.reduce((s, t) => s + teamScore(t), 0);
   const bSum = blueTeams.reduce((s, t) => s + teamScore(t), 0);
+
   const scale = Math.max(eloScale || seasonAvg * ELO_SCALE_MULTIPLIER, 1);
-  const d = (bSum - rSum) * (400 / scale);
-  return Math.max(0.05, Math.min(0.95, 1 / (1 + Math.pow(10, d / 400))));
+  const d = bSum - rSum;
+  // index.html uses: 1 / (1 + 10^(d / eloScale))  with clamp [0.03, 0.97]
+  return Math.max(0.03, Math.min(0.97, 1 / (1 + Math.pow(10, d / scale))));
 }
 
 // ── Season accuracy ────────────────────────────────────────
@@ -338,11 +435,15 @@ export function computeSeasonAccuracy(chronoSnapshots, state) {
   let correct = 0, total = 0;
   for (const { row, snap, mcSnap } of chronoSnapshots) {
     if (row.rtot == null || row.rtot === row.btot) continue;
-    const allTeams = [...row.rt, ...row.bt];
-    const minMc = Math.min(...allTeams.map(t => mcSnap?.[t] || 0));
-    if (minMc < MIN_MATCHES_FOR_PRED) continue;
-    const mockState = { ...state, ratings: snap, matchCounts: mcSnap,
-                        momentumEpa: snap, autoStability: state.autoStability };
+    // index.html uses shrunkEpaMap but with MIN_MATCHES_FOR_PRED=0 / EPA_TRUST_RAMP_END=0
+    // shrinkEpa always returns epa unchanged (trust=1 since matchCount>=0 always)
+    const shrunkSnap = shrunkEpaMap(snap, mcSnap, state.seasonAvg, state.teamRegion, state.regionEarlyAvg);
+    const mockState = {
+      ...state,
+      ratings: shrunkSnap,
+      matchCounts: mcSnap,
+      momentumEpa: shrunkSnap,
+    };
     const rwp = epaWinProb(row.rt, row.bt, mockState);
     const pred = rwp > 0.5 ? 'red' : 'blue';
     const actual = row.rtot > row.btot ? 'red' : 'blue';
@@ -357,9 +458,9 @@ export function getStats(team, state) {
   const epa = state.ratings[team];
   if (epa === undefined || epa === null) return null;
   const aepa = state.autoRatings[team] ?? epa * AUTO_PRIOR_FRAC;
-  const dc = state.dcRatings[team] ?? epa - aepa;
+  const dc   = state.dcRatings[team]   ?? epa - aepa;
   const init = state.initialEpas[team] ?? state.fallback;
-  const u = toU(epa, state.seasonAvg);
+  const u    = toU(epa, state.seasonAvg);
   const stability = state.autoStability[team] ?? 1.0;
   return {
     team, epa, auto_epa: aepa, teleop_epa: dc,
@@ -371,23 +472,29 @@ export function getStats(team, state) {
   };
 }
 
-// ── parseMatchRow (converts raw FTC API match → row) ──────
+// ── parseMatchRow ──────────────────────────────────────────
 export function parseMatchRow(season, m, scoreDetail, eventCode) {
   try {
     const code = (eventCode || '').toUpperCase();
     if (!code) return null;
     if (m.scoreRedFinal == null || m.scoreBlueFinal == null) return null;
+
     const teams = m.teams || [];
-    const rt = teams.filter(t => (t.station || '').startsWith('Red') && !t.surrogate && !t.noShow).map(t => t.teamNumber);
+    const rt = teams.filter(t => (t.station || '').startsWith('Red')  && !t.surrogate && !t.noShow).map(t => t.teamNumber);
     const bt = teams.filter(t => (t.station || '').startsWith('Blue') && !t.surrogate && !t.noShow).map(t => t.teamNumber);
     if (!rt.length || !bt.length) return null;
-    const redT = +(m.scoreRedFinal || 0), bluT = +(m.scoreBlueFinal || 0);
-    const redA = +(m.scoreRedAuto || 0), bluA = +(m.scoreBlueAuto || 0);
+
+    const redT = +(m.scoreRedFinal  || 0);
+    const bluT = +(m.scoreBlueFinal || 0);
+    const redA = +(m.scoreRedAuto   || 0);
+    const bluA = +(m.scoreBlueAuto  || 0);
+
     const alliances = (scoreDetail?.alliances) || [];
-    const rsc = alliances.find(a => a.alliance === 'Red') || {};
+    const rsc = alliances.find(a => a.alliance === 'Red')  || {};
     const bsc = alliances.find(a => a.alliance === 'Blue') || {};
-    const redF = +(rsc.foulPoints ?? m.scoreRedFoul ?? 0);
+    const redF = +(rsc.foulPoints ?? m.scoreRedFoul  ?? 0);
     const bluF = +(bsc.foulPoints ?? m.scoreBlueFoul ?? 0);
+
     return {
       season, event: code, match: `${code}-Q${m.matchNumber}`, rt, bt,
       rs: Math.max(0, redT - bluF),
@@ -398,20 +505,20 @@ export function parseMatchRow(season, m, scoreDetail, eventCode) {
       won: redT > bluT ? 1 : 0,
       mt: m.actualStartTime || m.startTime || '',
       level: 'qual', matchNum: m.matchNumber,
-      rPatPts: +(rsc.patternPoints ?? rsc.patternBonusPoints ?? 0),
-      bPatPts: +(bsc.patternPoints ?? bsc.patternBonusPoints ?? 0),
+      rPatPts:  +(rsc.patternPoints ?? rsc.patternBonusPoints ?? 0),
+      bPatPts:  +(bsc.patternPoints ?? bsc.patternBonusPoints ?? 0),
       rParkPts: +(rsc.parkPoints ?? rsc.endgameParkPoints ?? rsc.ascent1Points ?? rsc.ascentPoints ?? 0),
       bParkPts: +(bsc.parkPoints ?? bsc.endgameParkPoints ?? bsc.ascent1Points ?? bsc.ascentPoints ?? 0),
-      rNavPts: +(rsc.autoNavigationPoints ?? rsc.autoNavPoints ?? 0),
-      bNavPts: +(bsc.autoNavigationPoints ?? bsc.autoNavPoints ?? 0),
+      rNavPts:  +(rsc.autoNavigationPoints ?? rsc.autoNavPoints ?? 0),
+      bNavPts:  +(bsc.autoNavigationPoints ?? bsc.autoNavPoints ?? 0),
       rSampPts: +(rsc.autoSamplePoints ?? rsc.autoSpecimenPoints ?? 0),
       bSampPts: +(bsc.autoSamplePoints ?? bsc.autoSpecimenPoints ?? 0),
       rMovRP: rsc.movementRankingPoint ? 1 : 0,
       bMovRP: bsc.movementRankingPoint ? 1 : 0,
-      rGoalRP: rsc.goalRankingPoint ? 1 : 0,
-      bGoalRP: bsc.goalRankingPoint ? 1 : 0,
-      rPatRP: rsc.patternRankingPoint ? 1 : 0,
-      bPatRP: bsc.patternRankingPoint ? 1 : 0,
+      rGoalRP: rsc.goalRankingPoint    ? 1 : 0,
+      bGoalRP: bsc.goalRankingPoint    ? 1 : 0,
+      rPatRP:  rsc.patternRankingPoint ? 1 : 0,
+      bPatRP:  bsc.patternRankingPoint ? 1 : 0,
     };
   } catch (e) { return null; }
 }
