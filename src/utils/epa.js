@@ -465,7 +465,7 @@ export function getStats(team, state) {
 }
 
 // ── parseMatchRow ──────────────────────────────────────────
-export function parseMatchRow(season, m, scoreDetail, eventCode) {
+export function parseMatchRow(season, m, scoreDetail, eventCode, level) {
   try {
     const code = (eventCode || '').toUpperCase();
     if (!code) return null;
