@@ -20,7 +20,24 @@ async function fetchEventRows(eventCode) {
   } catch (e) {
     return []
   }
-  // ... existing qual parsing ...
+  const schedule = Array.isArray(result.schedule) ? result.schedule
+                  : Array.isArray(result) ? result
+                  : []
+    const scoreMap = {}
+    try{
+      const scoresResult = await ftcApi.getRetry(`/scores/${eventCode}/qual`)
+      const scoresList = scoresResult.matchScores || scoresResult.scores || []
+      for (const s of scoresList) {
+        const num = s.matchNumber ?? s.matchNum
+        if (num != null) scoreMap[num] = s
+      }
+    } catch (_) {}
+    
+  const rows = []
+  for (const m of schedule) {
+    const row = parseMatchRow(SEASON, m, scoreMap[m.matchNumber] ?? null, eventCode, 'qual')
+    if (row) rows.push(row)
+  }
 
   // ADD: fetch playoff matches too
   let playoffSchedule = []
