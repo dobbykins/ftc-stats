@@ -1,5 +1,5 @@
 name = "ftc-proxy"
-main = "be3ee167fe2246109dc7152c23b486e4"
+main = "worker.js"
 compatibility_date = "2024-01-01"
 
 # Cron: sync active events every 2 minutes
