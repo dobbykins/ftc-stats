@@ -107,7 +107,6 @@ function buildRegionalPriors(rows) {
       const ev = (r.event || '').toUpperCase();
       if (!earlyEvents.has(ev)) continue;
       // only qual matches for regional prior (matches reference guard)
-      if ((r.level || 'qual') !== 'qual' && r.level !== '' && r.level !== 'qualification') continue;
       if (r.rt?.length) perRobot.push(r.rs / r.rt.length);
       if (r.bt?.length) perRobot.push(r.bs / r.bt.length);
     }
@@ -491,7 +490,7 @@ export function parseMatchRow(season, m, scoreDetail, eventCode) {
       rtot: redT, btot: bluT, rf: redF, bf: bluF,
       won: redT > bluT ? 1 : 0,
       mt: m.actualStartTime || m.startTime || '',
-      level: 'qual', matchNum: m.matchNumber,
+      level, matchNum: m.matchNumber,
       rPatPts:  +(rsc.patternPoints ?? rsc.patternBonusPoints ?? 0),
       bPatPts:  +(bsc.patternPoints ?? bsc.patternBonusPoints ?? 0),
       rParkPts: +(rsc.parkPoints ?? rsc.endgameParkPoints ?? rsc.ascent1Points ?? rsc.ascentPoints ?? 0),

@@ -20,26 +20,34 @@ async function fetchEventRows(eventCode) {
   } catch (e) {
     return []
   }
+  // ... existing qual parsing ...
 
-  const schedule = Array.isArray(result.schedule) ? result.schedule
-                 : Array.isArray(result)           ? result
-                 : []
-
-  const scoreMap = {}
+  // ADD: fetch playoff matches too
+  let playoffSchedule = []
   try {
-    const scoresResult = await ftcApi.getRetry(`/scores/${eventCode}/qual`)
-    const scoresList = scoresResult.matchScores || scoresResult.scores || []
-    for (const s of scoresList) {
-      const num = s.matchNumber ?? s.matchNum
-      if (num != null) scoreMap[num] = s
-    }
+    const playoffResult = await ftcApi.getRetry(`/schedule/${eventCode}/playoff/hybrid`)
+    playoffSchedule = Array.isArray(playoffResult.schedule) ? playoffResult.schedule
+                    : Array.isArray(playoffResult) ? playoffResult
+                    : []
   } catch (_) {}
 
-  const rows = []
-  for (const m of schedule) {
-    const row = parseMatchRow(SEASON, m, scoreMap[m.matchNumber] ?? null, eventCode)
+  const playoffScoreMap = {}
+  if (playoffSchedule.length) {
+    try {
+      const scoresResult = await ftcApi.getRetry(`/scores/${eventCode}/playoff`)
+      const scoresList = scoresResult.matchScores || scoresResult.scores || []
+      for (const s of scoresList) {
+        const num = s.matchNumber ?? s.matchNum
+        if (num != null) playoffScoreMap[num] = s
+      }
+    } catch (_) {}
+  }
+
+  for (const m of playoffSchedule) {
+    const row = parseMatchRow(SEASON, m, playoffScoreMap[m.matchNumber] ?? null, eventCode, 'playoff')
     if (row) rows.push(row)
   }
+
   return rows
 }
 
