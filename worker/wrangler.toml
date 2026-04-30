@@ -12,7 +12,7 @@ crons = ["*/2 * * * *"]
 # Then paste the id below
 [[kv_namespaces]]
 binding = "FTC_KV"
-id = "a6ea8922d2ed4370a7e0cf6de6d6ca3b"
+id = "8a3fd3207d1942c89dac2f96e08188b4"
 
 # Secrets — set these with:
 #   wrangler secret put FTC_USER
