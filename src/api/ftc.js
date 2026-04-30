@@ -75,6 +75,14 @@ async function ftcFetchRetry(path, attempts = 3) {
   }
 }
 
+export function getLastSync() {
+  return parseInt(localStorage.getItem('ftc_last_sync') ?? '0', 10);
+}
+
+export function setLastSync(ts) {
+  localStorage.setItem('ftc_last_sync', ts.toString());
+}
+
 // ── Public API ────────────────────────────────────────────
 export const ftcApi = {
   // Events
