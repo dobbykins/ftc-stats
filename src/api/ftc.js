@@ -103,6 +103,24 @@ export const ftcApi = {
   // Team info
   getTeam: (teamNumber) =>
     ftcFetchRetry(`/teams?teamNumber=${teamNumber}`),
+
+  getBulk: () =>
+    fetch(`${PROXY}/bulk`, {
+      headers: { Authorization: authHeader(), Accept: 'application/json' }
+    }).then(r => {
+      if (r.status === 401) { clearCredentials(); throw new Error('UNAUTHORIZED') }
+      if (!r.ok) throw new Error(`HTTP ${r.status} for /bulk`)
+      return r.json()
+    }),
+
+  getDelta: (since) =>
+    fetch(`${PROXY}/delta?since=${since}`, {
+      headers: { Authorization: authHeader(), Accept: 'application/json' }
+    }).then(r => {
+      if (r.status === 401) { clearCredentials(); throw new Error('UNAUTHORIZED') }
+      if (!r.ok) throw new Error(`HTTP ${r.status} for /delta`)
+      return r.json()
+    }),
 }
 
 // ── Match data cache ──────────────────────────────────────
