@@ -25,7 +25,6 @@ async function fetchEventRows(eventCode) {
                  : Array.isArray(result)           ? result
                  : []
 
-  // Build score detail map for penalty-accurate EPA
   const scoreMap = {}
   try {
     const scoresResult = await ftcApi.getRetry(`/scores/${eventCode}/qual`)
@@ -44,8 +43,25 @@ async function fetchEventRows(eventCode) {
   return rows
 }
 
+// ── Synchronously build EPA state from cached rows ────────────────────────────
+function buildStateFromRows(rows) {
+  const result = buildEpa(rows, {})
+  const seasonAccuracy = computeSeasonAccuracy(result.chronoSnapshots, result)
+  return { ...result, rows, seasonAccuracy, loaded: true }
+}
+
+// ── Attempt to load and hydrate from localStorage cache on first render ───────
+function loadCachedState() {
+  try {
+    const rows = getCached()
+    if (rows?.length) return buildStateFromRows(rows)
+  } catch {}
+  return null
+}
+
 export function useEpaData() {
-  const [epaState, setEpaState] = useState(null)
+  // Initialize synchronously from cache — no loading spinner on revisit
+  const [epaState, setEpaState] = useState(() => loadCachedState())
   const [loading, setLoading]   = useState(false)
   const [progress, setProgress] = useState(0)
   const [message, setMessage]   = useState('')
@@ -56,6 +72,8 @@ export function useEpaData() {
   const load = useCallback(async (forceRefresh = false) => {
     if (!hasCredentials()) { setNeedsCredentials(true); return }
     if (loadingRef.current) return
+    // Already have data from cache and not forcing a refresh — do nothing
+    if (!forceRefresh && epaState?.loaded) return
     loadingRef.current = true
 
     setLoading(true)
@@ -110,7 +128,6 @@ export function useEpaData() {
             try {
               evRows = await fetchEventRows(ev.code)
             } catch (_) {}
-            // Atomic-safe: push result set, then update counters
             allRows.push(...evRows)
             completed++
             setProgress(Math.min(90, 10 + Math.round((completed / qualifying.length) * 78)))
@@ -135,10 +152,9 @@ export function useEpaData() {
       // ── 3. Build EPA ──────────────────────────────────────────
       setProgress(94)
       setMessage('Computing EPA ratings…')
-      const result = buildEpa(rows, {})
-      const seasonAccuracy = computeSeasonAccuracy(result.chronoSnapshots, result)
+      const newState = buildStateFromRows(rows)
 
-      setEpaState({ ...result, rows, seasonAccuracy, loaded: true })
+      setEpaState(newState)
       setProgress(100)
       setMessage('')
 
@@ -152,8 +168,8 @@ export function useEpaData() {
       setLoading(false)
       loadingRef.current = false
     }
-  }, [])
-  
+  }, [epaState?.loaded])
+
   return {
     state: epaState,
     loading, progress, message, error,
