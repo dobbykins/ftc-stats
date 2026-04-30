@@ -1,0 +1,19 @@
+name = "ftc-proxy"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# Cron: sync active events every 2 minutes
+[triggers]
+crons = ["*/2 * * * *"]
+
+# KV namespace binding
+# Create with: wrangler kv:namespace create FTC_KV
+# Then paste the id below
+[[kv_namespaces]]
+binding = "FTC_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# Secrets — set these with:
+#   wrangler secret put FTC_USER
+#   wrangler secret put FTC_KEY
+# They will NOT appear in this file (that's intentional)

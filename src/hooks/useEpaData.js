@@ -1,81 +1,27 @@
-import { useState, useCallback, useRef } from 'react'
-import { ftcApi, hasCredentials, getCached, setCached } from '../api/ftc'
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { ftcApi, hasCredentials, getCached, setCached, getLastSync, setLastSync } from '../api/ftc'
 import { buildEpa, computeSeasonAccuracy, parseMatchRow } from '../utils/epa'
 
 const SEASON = 2025
-const CONCURRENCY = 8
-const OFFSEASON_SFX   = ['OS', 'KO', 'SCRIMMAGE', 'DEMO', 'EXHIBITION']
-const OFFSEASON_TYPES = ['offseason', 'kickoff', 'demonstration', 'workshop']
+const DELTA_INTERVAL = 30_000  // poll for changes every 30s
 
-function isOffseason(code, type = '') {
-  const u = (code || '').toUpperCase()
-  return OFFSEASON_SFX.some(s => u.endsWith(s))
-    || OFFSEASON_TYPES.includes((type || '').toLowerCase())
-}
-
-async function fetchEventRows(eventCode) {
-  let result
-  try {
-    result = await ftcApi.getRetry(`/schedule/${eventCode}/qual/hybrid`)
-  } catch (e) {
-    return []
-  }
-  const schedule = Array.isArray(result.schedule) ? result.schedule
-                  : Array.isArray(result) ? result
-                  : []
-    const scoreMap = {}
-    try{
-      const scoresResult = await ftcApi.getRetry(`/scores/${eventCode}/qual`)
-      const scoresList = scoresResult.matchScores || scoresResult.scores || []
-      for (const s of scoresList) {
-        const num = s.matchNumber ?? s.matchNum
-        if (num != null) scoreMap[num] = s
-      }
-    } catch (_) {}
-    
-  const rows = []
-  for (const m of schedule) {
-    const row = parseMatchRow(SEASON, m, scoreMap[m.matchNumber] ?? null, eventCode, 'qual')
-    if (row) rows.push(row)
-  }
-
-  // ADD: fetch playoff matches too
-  let playoffSchedule = []
-  try {
-    const playoffResult = await ftcApi.getRetry(`/schedule/${eventCode}/playoff/hybrid`)
-    playoffSchedule = Array.isArray(playoffResult.schedule) ? playoffResult.schedule
-                    : Array.isArray(playoffResult) ? playoffResult
-                    : []
-  } catch (_) {}
-
-  const playoffScoreMap = {}
-  if (playoffSchedule.length) {
-    try {
-      const scoresResult = await ftcApi.getRetry(`/scores/${eventCode}/playoff`)
-      const scoresList = scoresResult.matchScores || scoresResult.scores || []
-      for (const s of scoresList) {
-        const num = s.matchNumber ?? s.matchNum
-        if (num != null) playoffScoreMap[num] = s
-      }
-    } catch (_) {}
-  }
-
-  for (const m of playoffSchedule) {
-    const row = parseMatchRow(SEASON, m, playoffScoreMap[m.matchNumber] ?? null, eventCode, 'playoff')
-    if (row) rows.push(row)
-  }
-
-  return rows
-}
-
-// ── Synchronously build EPA state from cached rows ────────────────────────────
+// ── Build EPA state from rows ──────────────────────────────
 function buildStateFromRows(rows) {
   const result = buildEpa(rows, {})
   const seasonAccuracy = computeSeasonAccuracy(result.chronoSnapshots, result)
   return { ...result, rows, seasonAccuracy, loaded: true }
 }
 
-// ── Attempt to load and hydrate from localStorage cache on first render ───────
+// ── Merge incoming rows into existing set ──────────────────
+// Rows are keyed by match string (e.g. "USMIFL-Q3")
+function mergeRows(existing, incoming) {
+  if (!incoming.length) return existing
+  const map = new Map(existing.map(r => [r.match, r]))
+  for (const row of incoming) map.set(row.match, row)
+  return [...map.values()]
+}
+
+// ── Load cached state synchronously on first render ───────
 function loadCachedState() {
   try {
     const rows = getCached()
@@ -85,104 +31,138 @@ function loadCachedState() {
 }
 
 export function useEpaData() {
-  // Initialize synchronously from cache — no loading spinner on revisit
-  const [epaState, setEpaState] = useState(() => loadCachedState())
-  const [loading, setLoading]   = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [message, setMessage]   = useState('')
-  const [error, setError]       = useState(null)
+  const [epaState, setEpaState]           = useState(() => loadCachedState())
+  const [loading, setLoading]             = useState(false)
+  const [progress, setProgress]           = useState(0)
+  const [message, setMessage]             = useState('')
+  const [error, setError]                 = useState(null)
   const [needsCredentials, setNeedsCredentials] = useState(!hasCredentials())
-  const loadingRef = useRef(false)
+  const [lastSyncTime, setLastSyncTime]   = useState(() => getLastSync())
 
+  const loadingRef  = useRef(false)
+  const deltaTimer  = useRef(null)
+  const isMounted   = useRef(true)
+
+  useEffect(() => {
+    isMounted.current = true
+    return () => {
+      isMounted.current = false
+      clearInterval(deltaTimer.current)
+    }
+  }, [])
+
+  // ── Delta poll: runs every 30s once data is loaded ────────
+  const startDeltaPolling = useCallback((syncTime) => {
+    clearInterval(deltaTimer.current)
+    deltaTimer.current = setInterval(async () => {
+      if (!isMounted.current || !hasCredentials()) return
+      try {
+        const result = await ftcApi.getDelta(syncTime)
+        if (!result.hasChanges || !result.rows?.length) {
+          // Update our local syncTime even if no changes
+          if (result.syncTime > syncTime) {
+            syncTime = result.syncTime
+            setLastSyncTime(syncTime)
+            setLastSync(syncTime)
+          }
+          return
+        }
+
+        // Merge new rows into existing state
+        setEpaState(prev => {
+          if (!prev?.rows) return prev
+          const merged = mergeRows(prev.rows, result.rows)
+          setCached(merged)
+          return buildStateFromRows(merged)
+        })
+
+        syncTime = result.syncTime
+        setLastSyncTime(syncTime)
+        setLastSync(syncTime)
+      } catch (e) {
+        console.warn('[delta poll] failed:', e.message)
+      }
+    }, DELTA_INTERVAL)
+  }, [])
+
+  // ── Main load function ─────────────────────────────────────
   const load = useCallback(async (forceRefresh = false) => {
     if (!hasCredentials()) { setNeedsCredentials(true); return }
     if (loadingRef.current) return
-    // Already have data from cache and not forcing a refresh — do nothing
-    if (!forceRefresh && epaState?.loaded) return
-    loadingRef.current = true
+    if (!forceRefresh && epaState?.loaded) {
+      // Already have data — just make sure delta polling is running
+      startDeltaPolling(lastSyncTime)
+      return
+    }
 
+    loadingRef.current = true
     setLoading(true)
     setError(null)
     setProgress(5)
 
     try {
-      // ── 1. Try cache first ────────────────────────────────────
-      let rows = []
+      let rows     = []
+      let syncTime = 0
+
       if (!forceRefresh) {
+        // ── 1. Try localStorage cache first (instant) ──────
         const cached = getCached()
         if (cached?.length) {
-          rows = cached
+          rows     = cached
+          syncTime = getLastSync()
           setMessage('Loaded from cache — computing EPA…')
+          setProgress(80)
         }
       }
 
-      // ── 2. Full fetch if no cache / force refresh ─────────────
-      if (!rows.length) {
-        setMessage('Fetching event list…')
-        let events = []
+      if (!rows.length || forceRefresh) {
+        // ── 2. Fetch full dataset from worker /bulk ────────
+        setMessage('Fetching full dataset from worker…')
+        setProgress(10)
+
         try {
-          const data = await ftcApi.getRetry('/events')
-          events = data.events || []
+          const result = await ftcApi.getBulk()
+          rows     = result.rows ?? []
+          syncTime = result.syncTime ?? Date.now()
+
+          if (rows.length) {
+            setCached(rows)
+            setLastSync(syncTime)
+          }
+          setProgress(85)
+          setMessage(`Loaded ${rows.length} matches — computing EPA…`)
         } catch (e) {
           if (e.message === 'UNAUTHORIZED') {
             setNeedsCredentials(true)
             setLoading(false)
+            loadingRef.current = false
             return
           }
           throw e
         }
-
-        const qualifying = events.filter(ev => {
-          const code = (ev.code || '').toUpperCase()
-          const type = (ev.typeName || ev.type || '').toLowerCase()
-          return !isOffseason(code, type)
-        })
-
-        setMessage(`Fetching ${qualifying.length} events…`)
-        let idx = 0
-        let completed = 0
-        const allRows = []
-
-        async function worker() {
-          while (true) {
-            let myIdx
-            myIdx = idx++
-            if (myIdx >= qualifying.length) break
-            const ev = qualifying[myIdx]
-            let evRows = []
-            try {
-              evRows = await fetchEventRows(ev.code)
-            } catch (_) {}
-            allRows.push(...evRows)
-            completed++
-            setProgress(Math.min(90, 10 + Math.round((completed / qualifying.length) * 78)))
-            setMessage(`Fetching events… (${completed}/${qualifying.length}, ${allRows.length} matches so far)`)
-          }
-        }
-
-        await Promise.all(Array.from({ length: CONCURRENCY }, worker))
-        rows.push(...allRows)
-
-        if (rows.length) setCached(rows)
       }
 
       if (!rows.length) {
-        console.error('[useEpaData] all fetches returned empty — check proxy/events')
-        setMessage('No data loaded — check credentials and proxy URL')
+        setMessage('No data — check credentials and worker URL')
         setLoading(false)
+        loadingRef.current = false
         return
       }
-      console.log('[useEpaData] rows loaded:', rows.length)
 
-      // ── 3. Build EPA ──────────────────────────────────────────
+      // ── 3. Build EPA ────────────────────────────────────
       setProgress(94)
       setMessage('Computing EPA ratings…')
       const newState = buildStateFromRows(rows)
 
-      setEpaState(newState)
-      setProgress(100)
-      setMessage('')
+      if (isMounted.current) {
+        setEpaState(newState)
+        setLastSyncTime(syncTime)
+        setProgress(100)
+        setMessage('')
 
+        // Start polling for incremental updates
+        startDeltaPolling(syncTime)
+      }
     } catch (e) {
       if (e.message === 'UNAUTHORIZED') {
         setNeedsCredentials(true)
@@ -190,15 +170,16 @@ export function useEpaData() {
         setError(e.message)
       }
     } finally {
-      setLoading(false)
+      if (isMounted.current) setLoading(false)
       loadingRef.current = false
     }
-  }, [epaState?.loaded])
+  }, [epaState?.loaded, lastSyncTime, startDeltaPolling])
 
   return {
     state: epaState,
     loading, progress, message, error,
     needsCredentials, setNeedsCredentials,
+    lastSyncTime,
     load,
   }
 }
