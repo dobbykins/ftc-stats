@@ -26,7 +26,7 @@
 
 const FTC_BASE    = 'https://ftc-api.firstinspires.org/v2.0'
 const SEASON      = 2025
-const CONCURRENCY = 10
+const CONCURRENCY = 3
 const CHUNK_SIZE  = 50   // events per cron tick
 
 const KV_KEYS = {
@@ -56,17 +56,33 @@ function ftcAuth(env) {
   return null
 }
 
-async function ftcFetch(path, env, clientAuth = null) {
+async function ftcFetch(path, env, clientAuth = null, attempt = 0) {
   const auth = ftcAuth(env) ?? clientAuth
   if (!auth) throw new Error('No auth available')
 
   const url = `${FTC_BASE}/${SEASON}${path}`
-  const res = await fetch(url, {
-    headers: { Authorization: auth, Accept: 'application/json' },
-    signal: AbortSignal.timeout(15_000),
-  })
+  let res
+  try {
+    res = await fetch(url, {
+      headers: { Authorization: auth, Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch (e) {
+    if (attempt < 3) {
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)))
+      return ftcFetch(path, env, clientAuth, attempt + 1)
+    }
+    throw e
+  }
 
   if (res.status === 401) throw new Error('UNAUTHORIZED')
+  if (res.status === 429) {
+    if (attempt < 3) {
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+      return ftcFetch(path, env, clientAuth, attempt + 1)
+    }
+    throw new Error('Rate limited')
+  }
   if (!res.ok) throw new Error(`FTC API error ${res.status} for ${path}`)
   return res.json()
 }
