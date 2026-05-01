@@ -23,6 +23,15 @@
  *   meta:cursor          → current chunk cursor index
  *   meta:active_events   → JSON array of active event codes
  *
+ * Subrequest budget (Cloudflare free plan = 50 per invocation):
+ *   - CHUNK_SIZE  = 20  events per cron tick
+ *   - CONCURRENCY = 3   parallel fetches
+ *   - fetchEventRows makes AT MOST 2 subrequests per event
+ *     (hybrid schedule + scores fallback, but scores is skipped
+ *      when the hybrid response already embeds them)
+ *   - Worst case: 20 events × 2 = 40 subrequests — safely under 50.
+ *   - deltaSync for active events uses the same concurrency cap.
+ *
  * wrangler.toml:
  *   [triggers]
  *   crons = ["*\/2 * * * *"]
@@ -30,8 +39,14 @@
 
 const FTC_BASE    = 'https://ftc-api.firstinspires.org/v2.0'
 const SEASON      = 2025
-const CONCURRENCY = 5
-const CHUNK_SIZE  = 30
+
+// ── Subrequest budget ─────────────────────────────────────
+// Free plan hard limit is 50 subrequests per Worker invocation.
+// Each event costs AT MOST 2 (schedule + scores fallback).
+// Keep CHUNK_SIZE × 2 well below 50 so there is headroom for
+// KV reads/writes and the event-list refresh on the first run.
+const CONCURRENCY = 3
+const CHUNK_SIZE  = 20
 
 // ── Helpers ───────────────────────────────────────────────
 
@@ -153,6 +168,7 @@ function parseMatchRow(m, scoreDetail, eventCode) {
 }
 
 async function fetchEventRows(eventCode, env, clientAuth = null) {
+  // Subrequest 1: hybrid schedule (includes scores when available)
   let scheduleResult
   try {
     scheduleResult = await ftcFetch(`/schedule/${eventCode}/qual/hybrid`, env, clientAuth)
@@ -166,17 +182,22 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
 
   if (!schedule.length) return []
 
-  // Build score map from hybrid data
-  const scoreMap = {}
-  for (const m of schedule) {
-    if (m.scoreRedFinal != null) {
-      scoreMap[m.matchNumber] = { alliances: m.alliances ?? [] }
-    }
-  }
-
-  // If hybrid didn't embed scores, fetch them separately
+  // Check whether the hybrid response already embedded scores.
+  // If it did, we skip the separate scores fetch entirely —
+  // saving a full subrequest per event (critical on the free plan).
   const hasEmbeddedScores = schedule.some(m => m.scoreRedFinal != null)
-  if (!hasEmbeddedScores) {
+
+  const scoreMap = {}
+
+  if (hasEmbeddedScores) {
+    // Scores are already in the hybrid payload — no extra fetch needed.
+    for (const m of schedule) {
+      if (m.scoreRedFinal != null) {
+        scoreMap[m.matchNumber] = { alliances: m.alliances ?? [] }
+      }
+    }
+  } else {
+    // Subrequest 2 (only when necessary): fetch scores separately.
     try {
       const scoresResult = await ftcFetch(`/scores/${eventCode}/qual`, env, clientAuth)
       const scoresList = scoresResult.matchScores ?? scoresResult.scores ?? []
@@ -184,7 +205,7 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
         const num = s.matchNumber ?? s.matchNum
         if (num != null) scoreMap[num] = s
       }
-      // Merge scores into schedule objects
+      // Merge scores back into schedule objects
       for (const m of schedule) {
         const s = scoreMap[m.matchNumber]
         if (s) {
@@ -196,7 +217,7 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
           m.scoreBlueFoul  = s.blueFoulPoints  ?? s.blueFouls ?? m.scoreBlueFoul  ?? 0
         }
       }
-    } catch { /* non-fatal */ }
+    } catch { /* non-fatal — rows without scores are filtered out by parseMatchRow */ }
   }
 
   const rows = []
@@ -287,7 +308,7 @@ async function chunkSync(env, clientAuth = null) {
     return { changed: 0, cursor: 0, total: allCodes.length }
   }
 
-  // Fetch rows for chunk concurrently
+  // Fetch rows for this chunk with capped concurrency
   const results = new Map()
   let idx = 0
   async function worker() {
@@ -299,12 +320,15 @@ async function chunkSync(env, clientAuth = null) {
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))
 
-  // Write each event to its own KV key
+  // Only write events that actually returned rows, to avoid
+  // overwriting good cached data with an empty array on a transient failure.
   await Promise.all(
-    [...results.entries()].map(([code, rows]) => putEventRows(env, code, rows))
+    [...results.entries()]
+      .filter(([, rows]) => rows.length > 0)
+      .map(([code, rows]) => putEventRows(env, code, rows))
   )
 
-  // Update active events and cursor
+  // Update active events list and advance cursor
   const now = new Date()
   const activeEvents = allMeta
     .filter(ev => new Date(ev.dateEnd) >= now)
@@ -330,14 +354,17 @@ async function deltaSync(env) {
   const active    = rawActive ? JSON.parse(rawActive) : []
   if (!active.length) return { changed: 0 }
 
+  // Cap active-event delta to the same concurrency limit
   let totalChanged = 0
   let idx = 0
   async function worker() {
     while (idx < active.length) {
       const code = active[idx++]
       const rows = await fetchEventRows(code, env)
-      await putEventRows(env, code, rows)
-      totalChanged += rows.length
+      if (rows.length > 0) {
+        await putEventRows(env, code, rows)
+        totalChanged += rows.length
+      }
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))

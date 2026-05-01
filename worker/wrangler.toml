@@ -7,13 +7,6 @@ workers_dev = true
 [triggers]
 crons = ["*/2 * * * *"]
  
-# Raise the subrequest limit to the maximum (default is 50).
-# Each event fetch makes 2 subrequests (schedule + scores),
-# so without this you hit the wall after ~25 events.
-# This is set to 1000 so it never needs touching in future seasons.
-[limits]
-subrequests = 1000
- 
 # KV namespace binding
 # Create with: wrangler kv:namespace create FTC_KV
 # Then paste the id below
