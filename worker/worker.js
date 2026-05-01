@@ -468,6 +468,8 @@ export default {
     }
 
     // ── GET /force-sync ────────────────────────────────────
+    // Only resets metadata — no event fetching here.
+    // The cron rebuilds everything in safe 20-event chunks (every 2 min).
     if (path === '/force-sync') {
       try {
         if (!ftcAuth(env)) {
@@ -483,22 +485,18 @@ export default {
           kvCursor = result.cursor
         }
 
-        // Reset meta
+        // Reset meta — cron will refresh event list and start chunking
         await Promise.all([
           env.FTC_KV.delete('meta:events'),
           env.FTC_KV.delete('meta:events_full'),
+          env.FTC_KV.delete('meta:active_events'),
           env.FTC_KV.put('meta:cursor',    '0'),
           env.FTC_KV.put('meta:last_sync', '0'),
         ])
 
-        // Kick off first chunk
-        const result = await chunkSync(env, clientAuth)
-
         return json({
           ok: true,
-          message: `Reset complete. First chunk synced (${result.changed} rows). Cron will build the full dataset every 2 min.`,
-          cursor: result.cursor,
-          total:  result.total,
+          message: 'Reset complete. Cron will rebuild the full dataset over the next few minutes (20 events every 2 min).',
         }, 200, cors)
       } catch (e) {
         if (e.message === 'UNAUTHORIZED') return json({ error: 'UNAUTHORIZED' }, 401, cors)
