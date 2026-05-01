@@ -468,24 +468,15 @@ export default {
     }
 
     // ── GET /force-sync ────────────────────────────────────
-    // Only resets metadata — no event fetching here.
-    // The cron rebuilds everything in safe 20-event chunks (every 2 min).
+    // Resets only the 5 meta keys — zero KV list/delete loops,
+    // zero FTC API calls. Well within the 50 subrequest limit.
+    // Stale rows:* keys get overwritten by the cron naturally.
     if (path === '/force-sync') {
       try {
         if (!ftcAuth(env)) {
           return json({ error: 'No auth — set FTC_USER and FTC_KEY secrets' }, 401, cors)
         }
 
-        // Clear all existing row keys
-        let kvCursor = undefined
-        while (true) {
-          const result = await env.FTC_KV.list({ prefix: 'rows:', cursor: kvCursor, limit: 1000 })
-          await Promise.all(result.keys.map(k => env.FTC_KV.delete(k.name)))
-          if (result.list_complete) break
-          kvCursor = result.cursor
-        }
-
-        // Reset meta — cron will refresh event list and start chunking
         await Promise.all([
           env.FTC_KV.delete('meta:events'),
           env.FTC_KV.delete('meta:events_full'),
@@ -496,7 +487,7 @@ export default {
 
         return json({
           ok: true,
-          message: 'Reset complete. Cron will rebuild the full dataset over the next few minutes (20 events every 2 min).',
+          message: 'Reset complete. Cron will refresh the event list and rebuild all rows over the next ~20 min (20 events every 2 min).',
         }, 200, cors)
       } catch (e) {
         if (e.message === 'UNAUTHORIZED') return json({ error: 'UNAUTHORIZED' }, 401, cors)
