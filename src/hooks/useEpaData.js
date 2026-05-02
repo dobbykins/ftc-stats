@@ -87,6 +87,7 @@ export function useEpaData() {
 
   // ── Main load function ─────────────────────────────────────
   const load = useCallback(async (forceRefresh = false) => {
+    console.log('[load] creds:', hasCredentials(), 'loading:', loadingRef.current)
     if (!hasCredentials()) { setNeedsCredentials(true); return }
     if (loadingRef.current) return
     if (!forceRefresh && epaState?.loaded) {
