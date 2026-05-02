@@ -16,7 +16,7 @@
  *   FTC_KEY   → your FIRST API key
  *
  * KV schema:
- *   rows:<EVENTCODE>     → JSON array of match rows for that event
+ *   rows:ALL             → JSON array of ALL match rows (single key)
  *   meta:events          → JSON array of all event codes
  *   meta:events_full     → JSON array of full event objects (for dateEnd)
  *   meta:last_sync       → timestamp of last sync
@@ -27,24 +27,12 @@
  *   - CHUNK_SIZE  = 20  events per cron tick
  *   - CONCURRENCY = 3   parallel fetches
  *   - fetchEventRows makes AT MOST 2 subrequests per event
- *     (hybrid schedule + scores fallback, but scores is skipped
- *      when the hybrid response already embeds them)
  *   - Worst case: 20 events × 2 = 40 subrequests — safely under 50.
- *   - deltaSync for active events uses the same concurrency cap.
- *
- * wrangler.toml:
- *   [triggers]
- *   crons = ["*\/2 * * * *"]
+ *   - /bulk is now just 1 KV read — no subrequest problem.
  */
 
 const FTC_BASE    = 'https://ftc-api.firstinspires.org/v2.0'
 const SEASON      = 2025
-
-// ── Subrequest budget ─────────────────────────────────────
-// Free plan hard limit is 50 subrequests per Worker invocation.
-// Each event costs AT MOST 2 (schedule + scores fallback).
-// Keep CHUNK_SIZE × 2 well below 50 so there is headroom for
-// KV reads/writes and the event-list refresh on the first run.
 const CONCURRENCY = 3
 const CHUNK_SIZE  = 20
 
@@ -168,7 +156,6 @@ function parseMatchRow(m, scoreDetail, eventCode) {
 }
 
 async function fetchEventRows(eventCode, env, clientAuth = null) {
-  // Subrequest 1: hybrid schedule (includes scores when available)
   let scheduleResult
   try {
     scheduleResult = await ftcFetch(`/schedule/${eventCode}/qual/hybrid`, env, clientAuth)
@@ -182,22 +169,16 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
 
   if (!schedule.length) return []
 
-  // Check whether the hybrid response already embedded scores.
-  // If it did, we skip the separate scores fetch entirely —
-  // saving a full subrequest per event (critical on the free plan).
   const hasEmbeddedScores = schedule.some(m => m.scoreRedFinal != null)
-
   const scoreMap = {}
 
   if (hasEmbeddedScores) {
-    // Scores are already in the hybrid payload — no extra fetch needed.
     for (const m of schedule) {
       if (m.scoreRedFinal != null) {
         scoreMap[m.matchNumber] = { alliances: m.alliances ?? [] }
       }
     }
   } else {
-    // Subrequest 2 (only when necessary): fetch scores separately.
     try {
       const scoresResult = await ftcFetch(`/scores/${eventCode}/qual`, env, clientAuth)
       const scoresList = scoresResult.matchScores ?? scoresResult.scores ?? []
@@ -205,7 +186,6 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
         const num = s.matchNumber ?? s.matchNum
         if (num != null) scoreMap[num] = s
       }
-      // Merge scores back into schedule objects
       for (const m of schedule) {
         const s = scoreMap[m.matchNumber]
         if (s) {
@@ -217,7 +197,7 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
           m.scoreBlueFoul  = s.blueFoulPoints  ?? s.blueFouls ?? m.scoreBlueFoul  ?? 0
         }
       }
-    } catch { /* non-fatal — rows without scores are filtered out by parseMatchRow */ }
+    } catch {}
   }
 
   const rows = []
@@ -228,38 +208,16 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
   return rows
 }
 
-// ── KV helpers (per-event sharding) ──────────────────────
-
-async function putEventRows(env, eventCode, rows) {
-  await env.FTC_KV.put(`rows:${eventCode.toUpperCase()}`, JSON.stringify(rows))
-}
+// ── KV helpers (single key for all rows) ─────────────────
 
 async function getAllRows(env) {
-  const allRows = []
-  let cursor = undefined
-
-  while (true) {
-    const result = await env.FTC_KV.list({ prefix: 'rows:', cursor, limit: 1000 })
-    
-    // Read keys sequentially instead of all at once
-    for (const k of result.keys) {
-      const raw = await env.FTC_KV.get(k.name)
-      if (raw) {
-        try { allRows.push(...JSON.parse(raw)) } catch {}
-      }
-    }
-
-    if (result.list_complete) break
-    cursor = result.cursor
-  }
-
-  return allRows
+  const raw = await env.FTC_KV.get('rows:ALL', { type: 'text' })
+  if (!raw) return []
+  try { return JSON.parse(raw) } catch { return [] }
 }
 
-async function getEventRows(env, eventCode) {
-  const raw = await env.FTC_KV.get(`rows:${eventCode.toUpperCase()}`)
-  if (!raw) return null
-  try { return JSON.parse(raw) } catch { return [] }
+async function putAllRows(env, rows) {
+  await env.FTC_KV.put('rows:ALL', JSON.stringify(rows))
 }
 
 // ── Event list management ─────────────────────────────────
@@ -325,13 +283,14 @@ async function chunkSync(env, clientAuth = null) {
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))
 
-  // Only write events that actually returned rows, to avoid
-  // overwriting good cached data with an empty array on a transient failure.
-  await Promise.all(
-    [...results.entries()]
-      .filter(([, rows]) => rows.length > 0)
-      .map(([code, rows]) => putEventRows(env, code, rows))
-  )
+  // Merge new rows into the single rows:ALL key
+  const existingRaw = await env.FTC_KV.get('rows:ALL', { type: 'text' })
+  const existing = existingRaw ? JSON.parse(existingRaw) : []
+  const rowMap = new Map(existing.map(r => [r.match, r]))
+  for (const rows of results.values()) {
+    for (const row of rows) rowMap.set(row.match, row)
+  }
+  await putAllRows(env, [...rowMap.values()])
 
   // Update active events list and advance cursor
   const now = new Date()
@@ -359,20 +318,32 @@ async function deltaSync(env) {
   const active    = rawActive ? JSON.parse(rawActive) : []
   if (!active.length) return { changed: 0 }
 
-  // Cap active-event delta to the same concurrency limit
-  let totalChanged = 0
+  const results = new Map()
   let idx = 0
+  let totalChanged = 0
+
   async function worker() {
     while (idx < active.length) {
       const code = active[idx++]
       const rows = await fetchEventRows(code, env)
       if (rows.length > 0) {
-        await putEventRows(env, code, rows)
+        results.set(code.toUpperCase(), rows)
         totalChanged += rows.length
       }
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))
+
+  if (results.size > 0) {
+    // Merge delta rows into the single rows:ALL key
+    const existingRaw = await env.FTC_KV.get('rows:ALL', { type: 'text' })
+    const existing = existingRaw ? JSON.parse(existingRaw) : []
+    const rowMap = new Map(existing.map(r => [r.match, r]))
+    for (const rows of results.values()) {
+      for (const row of rows) rowMap.set(row.match, row)
+    }
+    await putAllRows(env, [...rowMap.values()])
+  }
 
   const syncTime = Date.now()
   await env.FTC_KV.put('meta:last_sync', syncTime.toString())
@@ -430,7 +401,6 @@ export default {
         const complete = total === 0 || cursor === 0
 
         if (!syncTime) {
-          // Nothing synced yet — kick off first chunk
           const result = await chunkSync(env, clientAuth)
           const rows   = await getAllRows(env)
           return json({ rows, syncTime: result.syncTime ?? Date.now(), synced: result.cursor, total: result.total, complete: false }, 200, cors)
@@ -455,16 +425,14 @@ export default {
           return json({ rows: [], syncTime, hasChanges: false }, 200, cors)
         }
 
+        // For delta, read active event rows from the full dataset
         const rawActive = await env.FTC_KV.get('meta:active_events')
-        const active    = rawActive ? JSON.parse(rawActive) : []
+        const active    = new Set(rawActive ? JSON.parse(rawActive) : [])
 
-        const deltaRows = []
-        await Promise.all(active.map(async code => {
-          const rows = await getEventRows(env, code)
-          if (rows?.some(r => r.mt && new Date(r.mt).getTime() > since)) {
-            deltaRows.push(...rows)
-          }
-        }))
+        const allRows   = await getAllRows(env)
+        const deltaRows = allRows.filter(r =>
+          active.has(r.event) && r.mt && new Date(r.mt).getTime() > since
+        )
 
         return json({ rows: deltaRows, syncTime, hasChanges: deltaRows.length > 0 }, 200, cors)
       } catch (e) {
@@ -473,9 +441,6 @@ export default {
     }
 
     // ── GET /force-sync ────────────────────────────────────
-    // Resets only the 5 meta keys — zero KV list/delete loops,
-    // zero FTC API calls. Well within the 50 subrequest limit.
-    // Stale rows:* keys get overwritten by the cron naturally.
     if (path === '/force-sync') {
       try {
         if (!ftcAuth(env)) {
@@ -486,6 +451,7 @@ export default {
           env.FTC_KV.delete('meta:events'),
           env.FTC_KV.delete('meta:events_full'),
           env.FTC_KV.delete('meta:active_events'),
+          env.FTC_KV.delete('rows:ALL'),
           env.FTC_KV.put('meta:cursor',    '0'),
           env.FTC_KV.put('meta:last_sync', '0'),
         ])
@@ -503,34 +469,26 @@ export default {
     // ── GET /status ────────────────────────────────────────
     if (path === '/status') {
       try {
-        const [rawSync, rawCursor, rawCodes, rawActive] = await Promise.all([
+        const [rawSync, rawCursor, rawCodes, rawActive, rawAll] = await Promise.all([
           env.FTC_KV.get('meta:last_sync'),
           env.FTC_KV.get('meta:cursor'),
           env.FTC_KV.get('meta:events'),
           env.FTC_KV.get('meta:active_events'),
+          env.FTC_KV.get('rows:ALL', { type: 'text' }),
         ])
 
         const cursor       = parseInt(rawCursor ?? '0', 10)
         const allCodes     = rawCodes  ? JSON.parse(rawCodes)  : []
         const activeEvents = rawActive ? JSON.parse(rawActive) : []
-
-        // Count synced event keys
-        let syncedEvents = 0
-        let kvCursor = undefined
-        while (true) {
-          const result = await env.FTC_KV.list({ prefix: 'rows:', cursor: kvCursor, limit: 1000 })
-          syncedEvents += result.keys.length
-          if (result.list_complete) break
-          kvCursor = result.cursor
-        }
+        const totalRows    = rawAll ? JSON.parse(rawAll).length : 0
 
         return json({
           lastSync:     parseInt(rawSync ?? '0', 10),
           cursor,
           totalEvents:  allCodes.length,
-          syncedEvents,
           activeEvents: activeEvents.length,
-          complete:     allCodes.length > 0 && syncedEvents >= allCodes.length,
+          totalRows,
+          complete:     cursor === 0 && totalRows > 0,
         }, 200, cors)
       } catch (e) {
         return json({ error: e.message }, 500, cors)
