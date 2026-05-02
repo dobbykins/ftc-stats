@@ -237,17 +237,22 @@ async function putEventRows(env, eventCode, rows) {
 async function getAllRows(env) {
   const allRows = []
   let cursor = undefined
+
   while (true) {
     const result = await env.FTC_KV.list({ prefix: 'rows:', cursor, limit: 1000 })
-    await Promise.all(result.keys.map(async k => {
+    
+    // Read keys sequentially instead of all at once
+    for (const k of result.keys) {
       const raw = await env.FTC_KV.get(k.name)
       if (raw) {
         try { allRows.push(...JSON.parse(raw)) } catch {}
       }
-    }))
+    }
+
     if (result.list_complete) break
     cursor = result.cursor
   }
+
   return allRows
 }
 
