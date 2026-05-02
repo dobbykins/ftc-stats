@@ -142,22 +142,7 @@ export function useEpaData() {
           throw e
         }
       }
-      async function worker() {
-        while (true) {
-          let myIdx = idx++;
-          if (myIdx >= qualifying.length) break;
-          const ev = qualifying[myIdx];
-          let evRows = [];
-          try {
-            evRows = await fetchEventRows(ev.code);
-          } catch (e) {
-            console.warn(`[fetchEventRows] FAILED for ${ev.code}:`, e.message);
-          }
-          if (evRows.length === 0) {
-            console.log(`[fetchEventRows] 0 rows for ${ev.code}`);
-          }
-        }
-      }
+      
       if (!rows.length) {
         setMessage('No data — check credentials and worker URL')
         setLoading(false)

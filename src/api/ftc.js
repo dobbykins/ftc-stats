@@ -76,11 +76,21 @@ async function ftcFetchRetry(path, attempts = 3) {
 }
 
 export function getLastSync() {
-  return parseInt(localStorage.getItem('ftc_last_sync') ?? '0', 10);
+  return parseInt(localStorage.getItem('ftc_last_sync') || '0', 10);
 }
 
 export function setLastSync(ts) {
-  localStorage.setItem('ftc_last_sync', ts.toString());
+  localStorage.setItem('ftc_last_sync', String(ts));
+}
+
+async function workerFetch(path) {
+  if (!PROXY) throw new Error('VITE_PROXY_URL not set')
+  const r = await fetch(`${PROXY}${path}`, {
+    headers: { 'Authorization': authHeader(), 'Accept': 'application/json' }
+  })
+  if (r.status === 401) { clearCredentials(); throw new Error('UNAUTHORIZED') }
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
 }
 
 // ── Public API ────────────────────────────────────────────
@@ -103,26 +113,9 @@ export const ftcApi = {
   // Team info
   getTeam: (teamNumber) =>
     ftcFetchRetry(`/teams?teamNumber=${teamNumber}`),
-
-  getBulk: () =>
-    fetch(`${PROXY}/bulk`, {
-      headers: { Authorization: authHeader(), Accept: 'application/json' }
-    }).then(r => {
-      if (r.status === 401) { clearCredentials(); throw new Error('UNAUTHORIZED') }
-      if (!r.ok) throw new Error(`HTTP ${r.status} for /bulk`)
-      return r.json()
-    }),
-
-  getDelta: (since) =>
-    fetch(`${PROXY}/delta?since=${since}`, {
-      headers: { Authorization: authHeader(), Accept: 'application/json' }
-    }).then(r => {
-      if (r.status === 401) { clearCredentials(); throw new Error('UNAUTHORIZED') }
-      if (!r.ok) throw new Error(`HTTP ${r.status} for /delta`)
-      return r.json()
-    }),
+  getBulk: () => workerFetch('/bulk'),                        
+  getDelta: (since) => workerFetch(`/delta?since=${since}`), 
 }
-
 // ── Match data cache ──────────────────────────────────────
 const CACHE_KEY = `ftc_stats_rows_v1_${SEASON}`
 const CACHE_TTL = 1000 * 60 * 60 * 4 // 4 hours
