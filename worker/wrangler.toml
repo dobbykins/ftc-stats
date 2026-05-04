@@ -12,7 +12,7 @@ crons = ["*/2 * * * *"]
 # Then paste the id below
 [[d1_databases]]
 database_name = "ftc-stats"
-binding = "ftc-stats"
+binding = "FTC_DB"
 database_id = "013ce488-7ddd-4e79-a8f1-29450346feea"
  
 # Secrets — set these with:
