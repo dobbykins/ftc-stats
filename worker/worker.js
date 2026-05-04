@@ -1,34 +1,31 @@
 /**
- * FTC Stats Cloudflare Worker
+ * FTC Stats Cloudflare Worker — D1 edition
  *
  * Endpoints:
- *   GET /bulk              → full dataset from KV
+ *   GET /bulk              → full dataset from D1
  *   GET /delta?since=<ts>  → rows changed since timestamp
- *   GET /force-sync        → resets cursor so cron rebuilds dataset
+ *   GET /force-sync        → wipes D1 tables so cron rebuilds dataset
  *   GET /status            → sync progress info
  *   GET /<season>/*        → transparent proxy to FTC Events API
  *
- * KV bindings (set in wrangler.toml):
- *   FTC_KV  → stores rows per event, sync timestamps
+ * D1 binding (set in wrangler.toml):
+ *   FTC_DB  → your D1 database
  *
  * Secrets (set via `wrangler secret put`):
  *   FTC_USER  → your FIRST username
  *   FTC_KEY   → your FIRST API key
  *
- * KV schema:
- *   rows:ALL             → JSON array of ALL match rows (single key)
- *   meta:events          → JSON array of all event codes
- *   meta:events_full     → JSON array of full event objects (for dateEnd)
- *   meta:last_sync       → timestamp of last sync
- *   meta:cursor          → current chunk cursor index
- *   meta:active_events   → JSON array of active event codes
+ * D1 schema (run schema.sql once via `wrangler d1 execute FTC_DB --file=schema.sql`):
+ *   match_rows   → one row per match (replaces rows:ALL)
+ *   events       → one row per event (replaces meta:events_full)
+ *   meta         → key/value pairs   (replaces all meta:* KV keys)
  *
  * Subrequest budget (Cloudflare free plan = 50 per invocation):
  *   - CHUNK_SIZE  = 20  events per cron tick
  *   - CONCURRENCY = 3   parallel fetches
  *   - fetchEventRows makes AT MOST 2 subrequests per event
  *   - Worst case: 20 events × 2 = 40 subrequests — safely under 50.
- *   - /bulk is now just 1 KV read — no subrequest problem.
+ *   - /bulk is now a single D1 SELECT — no subrequest problem.
  */
 
 const FTC_BASE    = 'https://ftc-api.firstinspires.org/v2.0'
@@ -208,16 +205,143 @@ async function fetchEventRows(eventCode, env, clientAuth = null) {
   return rows
 }
 
-// ── KV helpers (single key for all rows) ─────────────────
+// ── D1 meta helpers (replaces KV meta:* keys) ────────────
 
-async function getAllRows(env) {
-  const raw = await env.FTC_KV.get('rows:ALL', { type: 'text' })
-  if (!raw) return []
-  try { return JSON.parse(raw) } catch { return [] }
+async function getMeta(env, key) {
+  const row = await env.FTC_DB.prepare('SELECT value FROM meta WHERE key = ?')
+    .bind(key)
+    .first()
+  return row?.value ?? null
 }
 
-async function putAllRows(env, rows) {
-  await env.FTC_KV.put('rows:ALL', JSON.stringify(rows))
+async function setMeta(env, key, value) {
+  await env.FTC_DB.prepare(
+    'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).bind(key, value).run()
+}
+
+async function deleteMeta(env, key) {
+  await env.FTC_DB.prepare('DELETE FROM meta WHERE key = ?').bind(key).run()
+}
+
+// ── D1 row helpers (replaces rows:ALL KV key) ─────────────
+
+/**
+ * Read all rows back out as parsed JS objects.
+ * Arrays (rt, bt) are stored as JSON strings in D1 and re-parsed here
+ * so callers get the same shape as the old KV implementation.
+ */
+async function getAllRows(env) {
+  const { results } = await env.FTC_DB.prepare('SELECT * FROM match_rows').all()
+  return results.map(deserializeRow)
+}
+
+/**
+ * Upsert a batch of rows into D1.
+ * D1 has a max of 100 bound parameters per statement and a max batch size,
+ * so we chunk into groups of 50 and use batched prepared statements.
+ */
+async function upsertRows(env, rows) {
+  if (!rows.length) return
+
+  // D1 batch() runs all statements in a single HTTP round-trip
+  const BATCH = 50
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const chunk = rows.slice(i, i + BATCH)
+    const stmts = chunk.map(row => {
+      const s = serializeRow(row)
+      return env.FTC_DB.prepare(`
+        INSERT INTO match_rows
+          (match_id, season, event, match, rt, bt, rs, bs, ra, ba,
+           rtot, btot, rf, bf, won, mt, level, match_num,
+           r_pat_pts, b_pat_pts, r_park_pts, b_park_pts, r_nav_pts, b_nav_pts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(match_id) DO UPDATE SET
+          rs        = excluded.rs,
+          bs        = excluded.bs,
+          ra        = excluded.ra,
+          ba        = excluded.ba,
+          rtot      = excluded.rtot,
+          btot      = excluded.btot,
+          rf        = excluded.rf,
+          bf        = excluded.bf,
+          won       = excluded.won,
+          mt        = excluded.mt,
+          r_pat_pts = excluded.r_pat_pts,
+          b_pat_pts = excluded.b_pat_pts,
+          r_park_pts= excluded.r_park_pts,
+          b_park_pts= excluded.b_park_pts,
+          r_nav_pts = excluded.r_nav_pts,
+          b_nav_pts = excluded.b_nav_pts
+      `).bind(
+        s.match_id, s.season, s.event, s.match, s.rt, s.bt,
+        s.rs, s.bs, s.ra, s.ba, s.rtot, s.btot, s.rf, s.bf,
+        s.won, s.mt, s.level, s.match_num,
+        s.r_pat_pts, s.b_pat_pts, s.r_park_pts, s.b_park_pts,
+        s.r_nav_pts, s.b_nav_pts
+      )
+    })
+    await env.FTC_DB.batch(stmts)
+  }
+}
+
+/** Flatten arrays to JSON strings for D1 storage */
+function serializeRow(row) {
+  return {
+    match_id:   row.match,
+    season:     row.season,
+    event:      row.event,
+    match:      row.match,
+    rt:         JSON.stringify(row.rt),
+    bt:         JSON.stringify(row.bt),
+    rs:         row.rs,
+    bs:         row.bs,
+    ra:         row.ra,
+    ba:         row.ba,
+    rtot:       row.rtot,
+    btot:       row.btot,
+    rf:         row.rf,
+    bf:         row.bf,
+    won:        row.won,
+    mt:         row.mt,
+    level:      row.level,
+    match_num:  row.matchNum,
+    r_pat_pts:  row.rPatPts,
+    b_pat_pts:  row.bPatPts,
+    r_park_pts: row.rParkPts,
+    b_park_pts: row.bParkPts,
+    r_nav_pts:  row.rNavPts,
+    b_nav_pts:  row.bNavPts,
+  }
+}
+
+/** Re-inflate D1 row back to the shape the React app expects */
+function deserializeRow(row) {
+  return {
+    season:   row.season,
+    event:    row.event,
+    match:    row.match,
+    rt:       JSON.parse(row.rt),
+    bt:       JSON.parse(row.bt),
+    rs:       row.rs,
+    bs:       row.bs,
+    ra:       row.ra,
+    ba:       row.ba,
+    rtot:     row.rtot,
+    btot:     row.btot,
+    rf:       row.rf,
+    bf:       row.bf,
+    won:      row.won,
+    mt:       row.mt,
+    level:    row.level,
+    matchNum: row.match_num,
+    rPatPts:  row.r_pat_pts,
+    bPatPts:  row.b_pat_pts,
+    rParkPts: row.r_park_pts,
+    bParkPts: row.b_park_pts,
+    rNavPts:  row.r_nav_pts,
+    bNavPts:  row.b_nav_pts,
+  }
 }
 
 // ── Event list management ─────────────────────────────────
@@ -227,127 +351,134 @@ async function refreshEventList(env, clientAuth = null) {
   const events = (data.events ?? []).filter(ev =>
     !isOffseason(ev.code, ev.typeName ?? ev.type ?? '')
   )
-  const codes = events.map(ev => ev.code)
 
-  await Promise.all([
-    env.FTC_KV.put('meta:events',      JSON.stringify(codes)),
-    env.FTC_KV.put('meta:events_full', JSON.stringify(events)),
-    env.FTC_KV.put('meta:cursor',      '0'),
-  ])
+  // Upsert all events into the events table
+  const BATCH = 50
+  for (let i = 0; i < events.length; i += BATCH) {
+    const chunk = events.slice(i, i + BATCH)
+    const stmts = chunk.map(ev =>
+      env.FTC_DB.prepare(`
+        INSERT INTO events (code, name, type_name, city, stateprov, country, date_start, date_end)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(code) DO UPDATE SET
+          name       = excluded.name,
+          type_name  = excluded.type_name,
+          city       = excluded.city,
+          stateprov  = excluded.stateprov,
+          country    = excluded.country,
+          date_start = excluded.date_start,
+          date_end   = excluded.date_end
+      `).bind(
+        ev.code,
+        ev.name ?? null,
+        ev.typeName ?? ev.type ?? null,
+        ev.city ?? null,
+        ev.stateProv ?? ev.stateprov ?? null,
+        ev.country ?? null,
+        ev.dateStart ?? null,
+        ev.dateEnd ?? null,
+      )
+    )
+    await env.FTC_DB.batch(stmts)
+  }
 
-  return { codes, events }
+  await setMeta(env, 'cursor', '0')
+
+  return { codes: events.map(ev => ev.code), events }
 }
 
 // ── Chunked sync ──────────────────────────────────────────
 
 async function chunkSync(env, clientAuth = null) {
-  const [rawCodes, rawFull, rawSync] = await Promise.all([
-    env.FTC_KV.get('meta:events'),
-    env.FTC_KV.get('meta:events_full'),
-    env.FTC_KV.get('meta:last_sync'),
+  const [rawSync, rawCursor] = await Promise.all([
+    getMeta(env, 'last_sync'),
+    getMeta(env, 'cursor'),
   ])
 
   const age = Date.now() - parseInt(rawSync ?? '0', 10)
   let allCodes, allMeta
 
-  if (!rawCodes || age > 1000 * 60 * 60 * 24) {
+  if (!rawCursor || age > 1000 * 60 * 60 * 24) {
     console.log('[cron] refreshing event list')
     const result = await refreshEventList(env, clientAuth)
     allCodes = result.codes
     allMeta  = result.events
   } else {
-    allCodes = JSON.parse(rawCodes)
-    allMeta  = rawFull ? JSON.parse(rawFull) : []
+    // Read from D1 events table instead of KV
+    const { results } = await env.FTC_DB.prepare('SELECT code, date_end FROM events ORDER BY rowid').all()
+    allCodes = results.map(r => r.code)
+    allMeta  = results
   }
 
   if (!allCodes.length) return { changed: 0, cursor: 0, total: 0 }
 
-  const cursor     = parseInt((await env.FTC_KV.get('meta:cursor')) ?? '0', 10)
+  const cursor     = parseInt(rawCursor ?? '0', 10)
   const chunk      = allCodes.slice(cursor, cursor + CHUNK_SIZE)
   const nextCursor = cursor + CHUNK_SIZE >= allCodes.length ? 0 : cursor + CHUNK_SIZE
 
   if (!chunk.length) {
-    await env.FTC_KV.put('meta:cursor', '0')
+    await setMeta(env, 'cursor', '0')
     return { changed: 0, cursor: 0, total: allCodes.length }
   }
 
   // Fetch rows for this chunk with capped concurrency
-  const results = new Map()
+  const newRows = []
   let idx = 0
   async function worker() {
     while (idx < chunk.length) {
       const code = chunk[idx++]
       const rows = await fetchEventRows(code, env, clientAuth)
-      results.set(code.toUpperCase(), rows)
+      newRows.push(...rows)
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))
 
-  // Merge new rows into the single rows:ALL key
-  const existingRaw = await env.FTC_KV.get('rows:ALL', { type: 'text' })
-  const existing = existingRaw ? JSON.parse(existingRaw) : []
-  const rowMap = new Map(existing.map(r => [r.match, r]))
-  for (const rows of results.values()) {
-    for (const row of rows) rowMap.set(row.match, row)
-  }
-  await putAllRows(env, [...rowMap.values()])
+  // Upsert into D1 — ON CONFLICT handles deduplication
+  await upsertRows(env, newRows)
 
-  // Update active events list and advance cursor
+  // Update active events and advance cursor
   const now = new Date()
   const activeEvents = allMeta
-    .filter(ev => new Date(ev.dateEnd) >= now)
+    .filter(ev => new Date(ev.dateEnd ?? ev.date_end) >= now)
     .map(ev => ev.code)
 
-  const totalRows = [...results.values()].reduce((sum, r) => sum + r.length, 0)
-  const syncTime  = Date.now()
-
+  const syncTime = Date.now()
   await Promise.all([
-    env.FTC_KV.put('meta:last_sync',     syncTime.toString()),
-    env.FTC_KV.put('meta:cursor',        nextCursor.toString()),
-    env.FTC_KV.put('meta:active_events', JSON.stringify(activeEvents)),
+    setMeta(env, 'last_sync',     syncTime.toString()),
+    setMeta(env, 'cursor',        nextCursor.toString()),
+    setMeta(env, 'active_events', JSON.stringify(activeEvents)),
   ])
 
-  console.log(`[cron] chunk ${cursor}–${cursor + chunk.length - 1}/${allCodes.length} | ${totalRows} rows | cursor→${nextCursor}`)
-  return { changed: totalRows, cursor: nextCursor, total: allCodes.length, syncTime }
+  console.log(`[cron] chunk ${cursor}–${cursor + chunk.length - 1}/${allCodes.length} | ${newRows.length} rows | cursor→${nextCursor}`)
+  return { changed: newRows.length, cursor: nextCursor, total: allCodes.length, syncTime }
 }
 
 // ── Delta sync (active events only) ──────────────────────
 
 async function deltaSync(env) {
-  const rawActive = await env.FTC_KV.get('meta:active_events')
+  const rawActive = await getMeta(env, 'active_events')
   const active    = rawActive ? JSON.parse(rawActive) : []
   if (!active.length) return { changed: 0 }
 
-  const results = new Map()
+  const newRows = []
   let idx = 0
-  let totalChanged = 0
 
   async function worker() {
     while (idx < active.length) {
       const code = active[idx++]
       const rows = await fetchEventRows(code, env)
-      if (rows.length > 0) {
-        results.set(code.toUpperCase(), rows)
-        totalChanged += rows.length
-      }
+      newRows.push(...rows)
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))
 
-  if (results.size > 0) {
-    // Merge delta rows into the single rows:ALL key
-    const existingRaw = await env.FTC_KV.get('rows:ALL', { type: 'text' })
-    const existing = existingRaw ? JSON.parse(existingRaw) : []
-    const rowMap = new Map(existing.map(r => [r.match, r]))
-    for (const rows of results.values()) {
-      for (const row of rows) rowMap.set(row.match, row)
-    }
-    await putAllRows(env, [...rowMap.values()])
+  if (newRows.length > 0) {
+    await upsertRows(env, newRows)
   }
 
   const syncTime = Date.now()
-  await env.FTC_KV.put('meta:last_sync', syncTime.toString())
-  return { changed: totalChanged, syncTime }
+  await setMeta(env, 'last_sync', syncTime.toString())
+  return { changed: newRows.length, syncTime }
 }
 
 // ── Request handler ───────────────────────────────────────
@@ -355,7 +486,7 @@ async function deltaSync(env) {
 export default {
   async scheduled(_event, env, _ctx) {
     try {
-      const rawActive = await env.FTC_KV.get('meta:active_events')
+      const rawActive = await getMeta(env, 'active_events')
       const active    = rawActive ? JSON.parse(rawActive) : []
 
       if (active.length) {
@@ -389,18 +520,21 @@ export default {
           return json({ error: 'UNAUTHORIZED' }, 401, cors)
         }
 
-        const [rawSync, rawCursor, rawCodes] = await Promise.all([
-          env.FTC_KV.get('meta:last_sync'),
-          env.FTC_KV.get('meta:cursor'),
-          env.FTC_KV.get('meta:events'),
+        const [rawSync, rawCursor] = await Promise.all([
+          getMeta(env, 'last_sync'),
+          getMeta(env, 'cursor'),
         ])
 
         const syncTime = parseInt(rawSync ?? '0', 10)
         const cursor   = parseInt(rawCursor ?? '0', 10)
-        const total    = rawCodes ? JSON.parse(rawCodes).length : 0
+
+        // Count total events from D1
+        const countRow = await env.FTC_DB.prepare('SELECT COUNT(*) AS n FROM events').first()
+        const total    = countRow?.n ?? 0
         const complete = total === 0 || cursor === 0
 
         if (!syncTime) {
+          // First request ever — kick off an initial chunk sync
           const result = await chunkSync(env, clientAuth)
           const rows   = await getAllRows(env)
           return json({ rows, syncTime: result.syncTime ?? Date.now(), synced: result.cursor, total: result.total, complete: false }, 200, cors)
@@ -418,22 +552,33 @@ export default {
     if (path === '/delta') {
       try {
         const since    = parseInt(url.searchParams.get('since') ?? '0', 10)
-        const rawSync  = await env.FTC_KV.get('meta:last_sync')
+        const rawSync  = await getMeta(env, 'last_sync')
         const syncTime = parseInt(rawSync ?? '0', 10)
 
         if (syncTime <= since) {
           return json({ rows: [], syncTime, hasChanges: false }, 200, cors)
         }
 
-        // For delta, read active event rows from the full dataset
-        const rawActive = await env.FTC_KV.get('meta:active_events')
-        const active    = new Set(rawActive ? JSON.parse(rawActive) : [])
+        // Query D1 directly for rows from active events after the given timestamp.
+        // This is much more efficient than the old "read all, filter in JS" approach.
+        const rawActive = await getMeta(env, 'active_events')
+        const active    = rawActive ? JSON.parse(rawActive) : []
 
-        const allRows   = await getAllRows(env)
-        const deltaRows = allRows.filter(r =>
-          active.has(r.event) && r.mt && new Date(r.mt).getTime() > since
-        )
+        if (!active.length) {
+          return json({ rows: [], syncTime, hasChanges: false }, 200, cors)
+        }
 
+        // Build a parameterized IN clause for active event codes
+        const placeholders = active.map(() => '?').join(', ')
+        const sinceISO     = new Date(since).toISOString()
+
+        const { results } = await env.FTC_DB.prepare(`
+          SELECT * FROM match_rows
+          WHERE event IN (${placeholders})
+            AND mt > ?
+        `).bind(...active, sinceISO).all()
+
+        const deltaRows = results.map(deserializeRow)
         return json({ rows: deltaRows, syncTime, hasChanges: deltaRows.length > 0 }, 200, cors)
       } catch (e) {
         return json({ error: e.message }, 500, cors)
@@ -447,13 +592,11 @@ export default {
           return json({ error: 'No auth — set FTC_USER and FTC_KEY secrets' }, 401, cors)
         }
 
-        await Promise.all([
-          env.FTC_KV.delete('meta:events'),
-          env.FTC_KV.delete('meta:events_full'),
-          env.FTC_KV.delete('meta:active_events'),
-          env.FTC_KV.delete('rows:ALL'),
-          env.FTC_KV.put('meta:cursor',    '0'),
-          env.FTC_KV.put('meta:last_sync', '0'),
+        // Wipe all data so cron rebuilds from scratch
+        await env.FTC_DB.batch([
+          env.FTC_DB.prepare('DELETE FROM match_rows'),
+          env.FTC_DB.prepare('DELETE FROM events'),
+          env.FTC_DB.prepare('DELETE FROM meta'),
         ])
 
         return json({
@@ -469,26 +612,24 @@ export default {
     // ── GET /status ────────────────────────────────────────
     if (path === '/status') {
       try {
-        const [rawSync, rawCursor, rawCodes, rawActive, rawAll] = await Promise.all([
-          env.FTC_KV.get('meta:last_sync'),
-          env.FTC_KV.get('meta:cursor'),
-          env.FTC_KV.get('meta:events'),
-          env.FTC_KV.get('meta:active_events'),
-          env.FTC_KV.get('rows:ALL', { type: 'text' }),
+        const [rawSync, rawCursor, rawActive, totalEventsRow, totalRowsRow] = await Promise.all([
+          getMeta(env, 'last_sync'),
+          getMeta(env, 'cursor'),
+          getMeta(env, 'active_events'),
+          env.FTC_DB.prepare('SELECT COUNT(*) AS n FROM events').first(),
+          env.FTC_DB.prepare('SELECT COUNT(*) AS n FROM match_rows').first(),
         ])
 
         const cursor       = parseInt(rawCursor ?? '0', 10)
-        const allCodes     = rawCodes  ? JSON.parse(rawCodes)  : []
         const activeEvents = rawActive ? JSON.parse(rawActive) : []
-        const totalRows    = rawAll ? JSON.parse(rawAll).length : 0
 
         return json({
           lastSync:     parseInt(rawSync ?? '0', 10),
           cursor,
-          totalEvents:  allCodes.length,
+          totalEvents:  totalEventsRow?.n ?? 0,
           activeEvents: activeEvents.length,
-          totalRows,
-          complete:     cursor === 0 && totalRows > 0,
+          totalRows:    totalRowsRow?.n ?? 0,
+          complete:     cursor === 0 && (totalRowsRow?.n ?? 0) > 0,
         }, 200, cors)
       } catch (e) {
         return json({ error: e.message }, 500, cors)
