@@ -5,11 +5,11 @@
 // K-factor shape
 const K_RAMP_START   = 0;
 const K_RAMP_END     = 3;
-const K_PEAK_VAL     = 0.3;
+const K_PEAK_VAL     = 0.2;
 const K_PLATEAU_END  = 6;
-const K_FLOOR        = 0.75;
+const K_FLOOR        = 0.2;
 
-const AUTO_PRIOR_FRAC    = 0.12;
+const AUTO_PRIOR_FRAC    = 0.18;
 const PATTERN_PRIOR_FRAC = 0.12;
 const PARK_PRIOR_FRAC    = 0.05;
 
@@ -21,8 +21,8 @@ const PRIOR_SEASON_WEIGHT  = 0.45;
 const AUTO_STABILITY_WINDOW = 8;
 const AUTO_STABILITY_FLOOR  = 0.60;
 
-const MOMENTUM_WINDOW      = 6;
-const MOMENTUM_WEIGHT      = 0.35;
+const MOMENTUM_WINDOW      = 0;
+const MOMENTUM_WEIGHT      = 0;
 const ELO_SCALE_MULTIPLIER = 1.0;
 
 // 0 = include all matches in accuracy (reference sets both to 0)
