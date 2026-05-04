@@ -10,9 +10,10 @@ crons = ["*/2 * * * *"]
 # KV namespace binding
 # Create with: wrangler kv:namespace create FTC_KV
 # Then paste the id below
-[[kv_namespaces]]
+[[d1_databases]]
+database_name = "ftc-stats"
 binding = "ftc-stats"
-id = "013ce488-7ddd-4e79-a8f1-29450346feea"
+database_id = "013ce488-7ddd-4e79-a8f1-29450346feea"
  
 # Secrets — set these with:
 #   wrangler secret put FTC_USER
