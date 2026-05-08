@@ -21,8 +21,6 @@ const PRIOR_SEASON_WEIGHT  = 0.4;
 const AUTO_STABILITY_WINDOW = 0.25;
 const AUTO_STABILITY_FLOOR  = 0.60;
 
-const m = 0; //Clutch Factor - basically matches you win that you shouldn't helps your epa more than matches you lose that you shouldn't. 0.25 is a reasonable default that seems to match observed data, but can be tweaked for more or less "clutch" emphasis.
-
 const MOMENTUM_WINDOW      = 0;
 const MOMENTUM_WEIGHT      = 0;
 const ELO_SCALE_MULTIPLIER = 1.0;
@@ -39,6 +37,12 @@ const variance = arr => {
 };
 export const toU = (epa, avg) => avg ? epa / avg : 0;
 
+export function mFactor(n)
+{
+  if (n <= 10)         return 0;
+  else if (n <= 15)    return (1/24)*(n-10);
+  else                 return 1;
+}
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
   if (n <= K_RAMP_END)    return K_FLOOR + (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
@@ -266,11 +270,13 @@ export function buildEpa(rows, priorRatings = {}) {
 
     for (const t of red) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myEpa = ratings[t] ?? initEpa(t);
       ratings[t] = myEpa + epaUpdate(k, m, rShare, myEpa, bShare, bEA);
     }
     for (const t of blue) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myEpa = ratings[t] ?? initEpa(t);
       ratings[t] = myEpa + epaUpdate(k, m, bShare, myEpa, rShare, rEA);
     }
@@ -287,6 +293,7 @@ export function buildEpa(rows, priorRatings = {}) {
     for (let i = 0; i < red.length; i++) {
       const t = red[i];
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (rAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(rAutoShares[i]);
@@ -295,6 +302,7 @@ export function buildEpa(rows, priorRatings = {}) {
     for (let i = 0; i < blue.length; i++) {
       const t = blue[i];
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (bAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(bAutoShares[i]);
@@ -303,6 +311,7 @@ export function buildEpa(rows, priorRatings = {}) {
 
     for (const t of red) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       if (rPatShare > 0 || row.rPatPts !== undefined)
         patR[t] = Math.max(0, (patR[t] ?? 0) + k * (rPatShare - (patR[t] ?? 0)));
       if (rParkShare > 0 || row.rParkPts !== undefined)
@@ -310,6 +319,7 @@ export function buildEpa(rows, priorRatings = {}) {
     }
     for (const t of blue) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       if (bPatShare > 0 || row.bPatPts !== undefined)
         patR[t] = Math.max(0, (patR[t] ?? 0) + k * (bPatShare - (patR[t] ?? 0)));
       if (bParkShare > 0 || row.bParkPts !== undefined)
