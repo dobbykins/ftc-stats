@@ -21,6 +21,8 @@ const PRIOR_SEASON_WEIGHT  = 0.4;
 const AUTO_STABILITY_WINDOW = 0.25;
 const AUTO_STABILITY_FLOOR  = 0.60;
 
+const m = 0.25; //Clutch Factor - basically matches you win that you shouldn't helps your epa more than matches you lose that you shouldn't. 0.25 is a reasonable default that seems to match observed data, but can be tweaked for more or less "clutch" emphasis.
+
 const MOMENTUM_WINDOW      = 0;
 const MOMENTUM_WEIGHT      = 0;
 const ELO_SCALE_MULTIPLIER = 1.0;
@@ -33,7 +35,6 @@ const EPA_TRUST_RAMP_END   = 0;
 export const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 const variance = arr => {
   if (arr.length < 2) return 0;
-  const m = mean(arr);
   return mean(arr.map(x => (x - m) ** 2));
 };
 export const toU = (epa, avg) => avg ? epa / avg : 0;
@@ -47,15 +48,6 @@ export function kFactor(n) {
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
   return k * (1 / (1 + m)) * ((scoreShare - myEpa) - m * (oppShare - oppEpa));
-}
-
-function computeAutoStability(history) {
-  if (!history || history.length < 3) return 1.0;
-  const m = mean(history);
-  if (m < 0.5) return 1.0;
-  const sd = Math.sqrt(variance(history));
-  const cv = sd / m;
-  return Math.max(AUTO_STABILITY_FLOOR, 1 - cv * (1 - AUTO_STABILITY_FLOOR));
 }
 
 export function uepaLabel(u) {
@@ -350,9 +342,6 @@ export function buildEpa(rows, priorRatings = {}) {
     if (hist.length >= 2) scheduleStrength[t] = mean(hist);
   }
 
-  const autoStability = {};
-  for (const t of allTeams) autoStability[t] = computeAutoStability(autoHistory[t]);
-
   const initialEpas = {};
   for (const t of allTeams) initialEpas[t] = initEpa(t);
 
@@ -363,8 +352,8 @@ export function buildEpa(rows, priorRatings = {}) {
     initialEpas, preEventEpas, chronoSnapshots,
     fallback: seasonAvg * GLOBAL_FALLBACK_FRAC,
     regionEarlyAvg, teamRegion,
-    autoStability, autoHistory,
-    momentumEpa, scheduleStrength, eloScale,
+    autoHistory, momentumEpa, 
+    scheduleStrength, eloScale,
   };
 }
 
@@ -376,7 +365,7 @@ export function buildEpa(rows, priorRatings = {}) {
 export function epaWinProb(redTeams, blueTeams, state) {
   const {
     ratings, momentumEpa, matchCounts, autoRatings,
-    autoStability, seasonAvg, eloScale, teamRegion, regionEarlyAvg,
+    seasonAvg, eloScale, teamRegion, regionEarlyAvg,
   } = state;
 
   const regionalFallback = (t) => {
@@ -397,7 +386,6 @@ export function epaWinProb(redTeams, blueTeams, state) {
   const teamScore = (t) => {
     const epa  = Math.max(0, predictionEpa(t));
     const aepa = autoRatings?.[t] ?? epa * AUTO_PRIOR_FRAC;
-    const stab = autoStability?.[t] ?? 1.0;
     const effectiveAuto = aepa * stab + (epa * AUTO_PRIOR_FRAC) * (1 - stab);
     const dcEpa = Math.max(0, epa - aepa);
     return Math.max(0, effectiveAuto + dcEpa);
@@ -453,7 +441,6 @@ export function getStats(team, state) {
   const dc   = state.dcRatings[team]   ?? epa - aepa;
   const init = state.initialEpas[team] ?? state.fallback;
   const u    = toU(epa, state.seasonAvg);
-  const stab = state.autoStability[team] ?? 1.0;
   return {
     team, epa, auto_epa: aepa, teleop_epa: dc,
     uepa: u, uepa_label: uepaLabel(u),
