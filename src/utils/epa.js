@@ -4,9 +4,9 @@
 
 // K-factor shape
 const K_RAMP_START   = 0;
-const K_RAMP_END     = 6;
-const K_PEAK_VAL     = 0.3;
-const K_PLATEAU_END  = 12;
+const K_RAMP_END     = 5;
+const K_PEAK_VAL     = 0.2;
+const K_PLATEAU_END  = 15;
 const K_FLOOR        = 0.5;
 
 const AUTO_PRIOR_FRAC    = 0.20;
@@ -21,7 +21,7 @@ const PRIOR_SEASON_WEIGHT  = 0.4;
 const AUTO_STABILITY_WINDOW = 0.25;
 const AUTO_STABILITY_FLOOR  = 0.60;
 
-const m = 0.25; //Clutch Factor - basically matches you win that you shouldn't helps your epa more than matches you lose that you shouldn't. 0.25 is a reasonable default that seems to match observed data, but can be tweaked for more or less "clutch" emphasis.
+const m = 0.2; //Clutch Factor - basically matches you win that you shouldn't helps your epa more than matches you lose that you shouldn't. 0.25 is a reasonable default that seems to match observed data, but can be tweaked for more or less "clutch" emphasis.
 
 const MOMENTUM_WINDOW      = 0;
 const MOMENTUM_WEIGHT      = 0;
