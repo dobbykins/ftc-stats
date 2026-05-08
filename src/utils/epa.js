@@ -3,10 +3,9 @@
 // ═══════════════════════════════════════════════════════════
 
 // K-factor shape
-const K_RAMP_START   = 0;
-const K_RAMP_END     = 3;
+const K_RAMP_START   = 3;
+const K_RAMP_END     = 7;
 const K_PEAK_VAL     = 0.2;
-const K_PLATEAU_END  = 6;
 const K_FLOOR        = 0.2;
 
 const AUTO_PRIOR_FRAC    = 0.20;
@@ -33,21 +32,20 @@ const EPA_TRUST_RAMP_END   = 0;
 export const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 const variance = arr => {
   if (arr.length < 2) return 0;
-  return mean(arr.map(x => (x - m) ** 2));
+  return mean(arr.map(x => (x) ** 2));
 };
 export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
   if (n <= 10)         return 0;
-  else if (n <= 15)    return (1/5)*(n-10);
+  else if (n <= 15)    return (1/6)*(n-10);
   else                 return 1;
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  if (n <= K_RAMP_END)    return K_FLOOR + (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
-  if (n <= K_PLATEAU_END) return K_PEAK_VAL;
-  return Math.max(K_FLOOR, K_PEAK_VAL - ((K_PEAK_VAL - K_FLOOR) / 30) * (n - K_PLATEAU_END));
+  if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR + (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
+  if (n >= K_RAMP_END) return K_PEAK_VAL;
 }
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
@@ -293,25 +291,20 @@ export function buildEpa(rows, priorRatings = {}) {
     for (let i = 0; i < red.length; i++) {
       const t = red[i];
       const k = kFactor(mcEvent[t] || 0);
-      const m = mFactor(mcEvent[t] || 0);
       const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (rAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(rAutoShares[i]);
-      if (autoHistory[t].length > AUTO_STABILITY_WINDOW) autoHistory[t].shift();
     }
     for (let i = 0; i < blue.length; i++) {
       const t = blue[i];
       const k = kFactor(mcEvent[t] || 0);
-      const m = mFactor(mcEvent[t] || 0);
       const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (bAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(bAutoShares[i]);
-      if (autoHistory[t].length > AUTO_STABILITY_WINDOW) autoHistory[t].shift();
     }
 
     for (const t of red) {
       const k = kFactor(mcEvent[t] || 0);
-      const m = mFactor(mcEvent[t] || 0);
       if (rPatShare > 0 || row.rPatPts !== undefined)
         patR[t] = Math.max(0, (patR[t] ?? 0) + k * (rPatShare - (patR[t] ?? 0)));
       if (rParkShare > 0 || row.rParkPts !== undefined)
@@ -319,7 +312,6 @@ export function buildEpa(rows, priorRatings = {}) {
     }
     for (const t of blue) {
       const k = kFactor(mcEvent[t] || 0);
-      const m = mFactor(mcEvent[t] || 0);
       if (bPatShare > 0 || row.bPatPts !== undefined)
         patR[t] = Math.max(0, (patR[t] ?? 0) + k * (bPatShare - (patR[t] ?? 0)));
       if (bParkShare > 0 || row.bParkPts !== undefined)
@@ -396,7 +388,6 @@ export function epaWinProb(redTeams, blueTeams, state) {
   const teamScore = (t) => {
     const epa  = Math.max(0, predictionEpa(t));
     const aepa = autoRatings?.[t] ?? epa * AUTO_PRIOR_FRAC;
-    const effectiveAuto = aepa * stab + (epa * AUTO_PRIOR_FRAC) * (1 - stab);
     const dcEpa = Math.max(0, epa - aepa);
     return Math.max(0, effectiveAuto + dcEpa);
   };
@@ -455,7 +446,7 @@ export function getStats(team, state) {
     team, epa, auto_epa: aepa, teleop_epa: dc,
     uepa: u, uepa_label: uepaLabel(u),
     matches: state.matchCounts[team] || 0,
-    trend: epa - init, auto_stability: stab,
+    trend: epa - init,
     momentum_epa: state.momentumEpa[team] ?? epa,
     schedule_strength: state.scheduleStrength[team],
   };
