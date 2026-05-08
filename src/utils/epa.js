@@ -40,7 +40,7 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 export function mFactor(n)
 {
   if (n <= 10)         return 0;
-  else if (n <= 15)    return (1/24)*(n-10);
+  else if (n <= 15)    return (1/5)*(n-10);
   else                 return 1;
 }
 export function kFactor(n) {
