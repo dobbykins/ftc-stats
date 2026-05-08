@@ -4,18 +4,18 @@
 
 // K-factor shape
 const K_RAMP_START   = 0;
-const K_RAMP_END     = 5;
-const K_PEAK_VAL     = 0.2;
-const K_PLATEAU_END  = 10;
-const K_FLOOR        = 0.35;
+const K_RAMP_END     = 6;
+const K_PEAK_VAL     = 0.3;
+const K_PLATEAU_END  = 12;
+const K_FLOOR        = 0.5;
 
 const AUTO_PRIOR_FRAC    = 0.20;
 const PATTERN_PRIOR_FRAC = 0.0;
 const PARK_PRIOR_FRAC    = 0.0;
 
 const REGION_EARLY_EVENTS  = 4;
-const REGION_FALLBACK_FRAC = 0.92;
-const GLOBAL_FALLBACK_FRAC = 0.88;
+const REGION_FALLBACK_FRAC = 0.98;
+const GLOBAL_FALLBACK_FRAC = 0.95;
 const PRIOR_SEASON_WEIGHT  = 0.4;
 
 const AUTO_STABILITY_WINDOW = 0.25;
