@@ -9,16 +9,16 @@ const K_PEAK_VAL     = 0.2;
 const K_PLATEAU_END  = 6;
 const K_FLOOR        = 0.2;
 
-const AUTO_PRIOR_FRAC    = 0.18;
+const AUTO_PRIOR_FRAC    = 0.20;
 const PATTERN_PRIOR_FRAC = 0.0;
 const PARK_PRIOR_FRAC    = 0.0;
 
 const REGION_EARLY_EVENTS  = 4;
-const REGION_FALLBACK_FRAC = 0.92;
-const GLOBAL_FALLBACK_FRAC = 0.88;
+const REGION_FALLBACK_FRAC = 0.98;
+const GLOBAL_FALLBACK_FRAC = 0.95;
 const PRIOR_SEASON_WEIGHT  = 0.4;
 
-const AUTO_STABILITY_WINDOW = 8;
+const AUTO_STABILITY_WINDOW = 0.25;
 const AUTO_STABILITY_FLOOR  = 0.60;
 
 const MOMENTUM_WINDOW      = 0;
@@ -33,11 +33,16 @@ const EPA_TRUST_RAMP_END   = 0;
 export const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 const variance = arr => {
   if (arr.length < 2) return 0;
-  const m = mean(arr);
   return mean(arr.map(x => (x - m) ** 2));
 };
 export const toU = (epa, avg) => avg ? epa / avg : 0;
 
+export function mFactor(n)
+{
+  if (n <= 10)         return 0;
+  else if (n <= 15)    return (1/5)*(n-10);
+  else                 return 1;
+}
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
   if (n <= K_RAMP_END)    return K_FLOOR + (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
@@ -47,15 +52,6 @@ export function kFactor(n) {
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
   return k * (1 / (1 + m)) * ((scoreShare - myEpa) - m * (oppShare - oppEpa));
-}
-
-function computeAutoStability(history) {
-  if (!history || history.length < 3) return 1.0;
-  const m = mean(history);
-  if (m < 0.5) return 1.0;
-  const sd = Math.sqrt(variance(history));
-  const cv = sd / m;
-  return Math.max(AUTO_STABILITY_FLOOR, 1 - cv * (1 - AUTO_STABILITY_FLOOR));
 }
 
 export function uepaLabel(u) {
@@ -274,11 +270,13 @@ export function buildEpa(rows, priorRatings = {}) {
 
     for (const t of red) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myEpa = ratings[t] ?? initEpa(t);
       ratings[t] = myEpa + epaUpdate(k, m, rShare, myEpa, bShare, bEA);
     }
     for (const t of blue) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myEpa = ratings[t] ?? initEpa(t);
       ratings[t] = myEpa + epaUpdate(k, m, bShare, myEpa, rShare, rEA);
     }
@@ -295,6 +293,7 @@ export function buildEpa(rows, priorRatings = {}) {
     for (let i = 0; i < red.length; i++) {
       const t = red[i];
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (rAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(rAutoShares[i]);
@@ -303,6 +302,7 @@ export function buildEpa(rows, priorRatings = {}) {
     for (let i = 0; i < blue.length; i++) {
       const t = blue[i];
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (bAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(bAutoShares[i]);
@@ -311,6 +311,7 @@ export function buildEpa(rows, priorRatings = {}) {
 
     for (const t of red) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       if (rPatShare > 0 || row.rPatPts !== undefined)
         patR[t] = Math.max(0, (patR[t] ?? 0) + k * (rPatShare - (patR[t] ?? 0)));
       if (rParkShare > 0 || row.rParkPts !== undefined)
@@ -318,6 +319,7 @@ export function buildEpa(rows, priorRatings = {}) {
     }
     for (const t of blue) {
       const k = kFactor(mcEvent[t] || 0);
+      const m = mFactor(mcEvent[t] || 0);
       if (bPatShare > 0 || row.bPatPts !== undefined)
         patR[t] = Math.max(0, (patR[t] ?? 0) + k * (bPatShare - (patR[t] ?? 0)));
       if (bParkShare > 0 || row.bParkPts !== undefined)
@@ -350,9 +352,6 @@ export function buildEpa(rows, priorRatings = {}) {
     if (hist.length >= 2) scheduleStrength[t] = mean(hist);
   }
 
-  const autoStability = {};
-  for (const t of allTeams) autoStability[t] = computeAutoStability(autoHistory[t]);
-
   const initialEpas = {};
   for (const t of allTeams) initialEpas[t] = initEpa(t);
 
@@ -363,8 +362,8 @@ export function buildEpa(rows, priorRatings = {}) {
     initialEpas, preEventEpas, chronoSnapshots,
     fallback: seasonAvg * GLOBAL_FALLBACK_FRAC,
     regionEarlyAvg, teamRegion,
-    autoStability, autoHistory,
-    momentumEpa, scheduleStrength, eloScale,
+    autoHistory, momentumEpa, 
+    scheduleStrength, eloScale,
   };
 }
 
@@ -376,7 +375,7 @@ export function buildEpa(rows, priorRatings = {}) {
 export function epaWinProb(redTeams, blueTeams, state) {
   const {
     ratings, momentumEpa, matchCounts, autoRatings,
-    autoStability, seasonAvg, eloScale, teamRegion, regionEarlyAvg,
+    seasonAvg, eloScale, teamRegion, regionEarlyAvg,
   } = state;
 
   const regionalFallback = (t) => {
@@ -397,7 +396,6 @@ export function epaWinProb(redTeams, blueTeams, state) {
   const teamScore = (t) => {
     const epa  = Math.max(0, predictionEpa(t));
     const aepa = autoRatings?.[t] ?? epa * AUTO_PRIOR_FRAC;
-    const stab = autoStability?.[t] ?? 1.0;
     const effectiveAuto = aepa * stab + (epa * AUTO_PRIOR_FRAC) * (1 - stab);
     const dcEpa = Math.max(0, epa - aepa);
     return Math.max(0, effectiveAuto + dcEpa);
@@ -453,7 +451,6 @@ export function getStats(team, state) {
   const dc   = state.dcRatings[team]   ?? epa - aepa;
   const init = state.initialEpas[team] ?? state.fallback;
   const u    = toU(epa, state.seasonAvg);
-  const stab = state.autoStability[team] ?? 1.0;
   return {
     team, epa, auto_epa: aepa, teleop_epa: dc,
     uepa: u, uepa_label: uepaLabel(u),
