@@ -32,7 +32,8 @@ const EPA_TRUST_RAMP_END   = 0;
 export const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 const variance = arr => {
   if (arr.length < 2) return 0;
-  return mean(arr.map(x => (x) ** 2));
+  const m = mean(arr);
+  return mean(arr.map(x => (x - m) ** 2));
 };
 export const toU = (epa, avg) => avg ? epa / avg : 0;
 
@@ -389,7 +390,7 @@ export function epaWinProb(redTeams, blueTeams, state) {
     const epa  = Math.max(0, predictionEpa(t));
     const aepa = autoRatings?.[t] ?? epa * AUTO_PRIOR_FRAC;
     const dcEpa = Math.max(0, epa - aepa);
-    return Math.max(0, effectiveAuto + dcEpa);
+    return Math.max(0, dcEpa);
   };
 
   const rSum = redTeams.reduce((s, t) => s + teamScore(t), 0);
