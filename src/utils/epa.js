@@ -45,7 +45,7 @@ export function mFactor(n)
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (K_FLOOR - K_PEAK_VAL) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
+  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR + (K_FLOOR - K_PEAK_VAL) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
   else  return K_PEAK_VAL;
 }
 
