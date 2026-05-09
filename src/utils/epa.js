@@ -4,7 +4,7 @@
 
 // K-factor shape
 const K_RAMP_START   = 2;
-const K_RAMP_END     = 6;
+const K_RAMP_END     = 8;
 const K_PEAK_VAL     = 0.35;
 const K_FLOOR        = 0.65;
 
@@ -45,7 +45,7 @@ export function mFactor(n)
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR + (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
+  if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
   if (n >= K_RAMP_END) return K_PEAK_VAL;
 }
 
