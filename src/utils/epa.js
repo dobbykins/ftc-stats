@@ -6,7 +6,7 @@
 const K_RAMP_START   = 2;
 const K_RAMP_END     = 5;
 const K_PEAK_VAL     = 0.45;
-const K_FLOOR        = 0.65;
+const K_FLOOR        = 0.7;
 
 const AUTO_PRIOR_FRAC    = 0.20;
 const PATTERN_PRIOR_FRAC = 0.0;
@@ -45,7 +45,7 @@ export function mFactor(n)
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (1/30) * (n - K_RAMP_START);
+  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START);
   else  return K_PEAK_VAL;
 }
 
