@@ -3,10 +3,10 @@
 // ═══════════════════════════════════════════════════════════
 
 // K-factor shape
-const K_RAMP_START   = 2;
-const K_RAMP_END     = 7;
-const K_PEAK_VAL     = 0.2;
-const K_FLOOR        = 0.65;
+const K_RAMP_START   = 6;
+const K_RAMP_END     = 12;
+const K_PEAK_VAL     = 0.3;
+const K_FLOOR        = 0.5;
 
 const AUTO_PRIOR_FRAC    = 0.20;
 const PATTERN_PRIOR_FRAC = 0.0;
@@ -40,13 +40,13 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 export function mFactor(n)
 {
   if (n <= 12)         return 0;
-  else if (n <= 24)    return (1/12)*(n-12);
-  else                 return 1;
+  else if (n <= 36)    return (1/24)*(n-12);
+  else                 return 0.5;
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
-  if (n >= K_RAMP_END) return K_PEAK_VAL;
+  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (1/K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START);
+  else if (n >= K_RAMP_END) return K_PEAK_VAL;
 }
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
