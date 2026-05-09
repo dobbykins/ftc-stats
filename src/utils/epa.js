@@ -6,7 +6,7 @@
 const K_RAMP_START   = 2;
 const K_RAMP_END     = 5;
 const K_PEAK_VAL     = 0.25;
-const K_FLOOR        = 0.28;
+const K_FLOOR        = 0.45;
 
 const AUTO_PRIOR_FRAC    = 0.20;
 const PATTERN_PRIOR_FRAC = 0.0;
@@ -39,8 +39,8 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  if (n <= 10)         return 0;
-  else if (n <= 17)    return (1/8)*(n-10);
+  if (n <= 12)         return 0;
+  else if (n <= 20)    return (1/9)*(n-10);
   else                 return 1;
 }
 export function kFactor(n) {
