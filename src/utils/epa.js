@@ -3,8 +3,8 @@
 // ═══════════════════════════════════════════════════════════
 
 // K-factor shape
-const K_RAMP_START   = 3;
-const K_RAMP_END     = 8;
+const K_RAMP_START   = 2;
+const K_RAMP_END     = 5;
 const K_PEAK_VAL     = 0.50;
 const K_FLOOR        = 0.60;
 
@@ -41,7 +41,7 @@ export function mFactor(n)
 {
   if (n <= 10)         return 0;
   else if (n <= 18)    return (5/24)*(n-10);
-  else                 return 0.6;
+  else                 return 1;
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
