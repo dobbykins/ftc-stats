@@ -26,6 +26,10 @@
  *   - fetchEventRows makes AT MOST 2 subrequests per event
  *   - Worst case: 20 events × 2 = 40 subrequests — safely under 50.
  *   - /bulk is now a single D1 SELECT — no subrequest problem.
+ *
+ * Schema migration required (run once before deploying this version):
+ *   ALTER TABLE match_rows ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'));
+ *   CREATE INDEX IF NOT EXISTS idx_match_rows_updated_at ON match_rows(updated_at);
  */
 
 const FTC_BASE    = 'https://ftc-api.firstinspires.org/v2.0'
@@ -240,11 +244,14 @@ async function getAllRows(env) {
  * Upsert a batch of rows into D1.
  * D1 has a max of 100 bound parameters per statement and a max batch size,
  * so we chunk into groups of 50 and use batched prepared statements.
+ *
+ * updated_at is set to the current UTC time on every upsert so that the
+ * /delta endpoint can filter by "rows touched since last sync" rather than
+ * by match start time (mt), which is semantically wrong for delta queries.
  */
 async function upsertRows(env, rows) {
   if (!rows.length) return
 
-  // D1 batch() runs all statements in a single HTTP round-trip
   const BATCH = 50
   for (let i = 0; i < rows.length; i += BATCH) {
     const chunk = rows.slice(i, i + BATCH)
@@ -254,31 +261,34 @@ async function upsertRows(env, rows) {
         INSERT INTO match_rows
           (match_id, season, event, match, rt, bt, rs, bs, ra, ba,
            rtot, btot, rf, bf, won, mt, level, match_num,
-           r_pat_pts, b_pat_pts, r_park_pts, b_park_pts, r_nav_pts, b_nav_pts)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           r_pat_pts, b_pat_pts, r_park_pts, b_park_pts, r_nav_pts, b_nav_pts,
+           updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(match_id) DO UPDATE SET
-          rs        = excluded.rs,
-          bs        = excluded.bs,
-          ra        = excluded.ra,
-          ba        = excluded.ba,
-          rtot      = excluded.rtot,
-          btot      = excluded.btot,
-          rf        = excluded.rf,
-          bf        = excluded.bf,
-          won       = excluded.won,
-          mt        = excluded.mt,
-          r_pat_pts = excluded.r_pat_pts,
-          b_pat_pts = excluded.b_pat_pts,
-          r_park_pts= excluded.r_park_pts,
-          b_park_pts= excluded.b_park_pts,
-          r_nav_pts = excluded.r_nav_pts,
-          b_nav_pts = excluded.b_nav_pts
+          rs         = excluded.rs,
+          bs         = excluded.bs,
+          ra         = excluded.ra,
+          ba         = excluded.ba,
+          rtot       = excluded.rtot,
+          btot       = excluded.btot,
+          rf         = excluded.rf,
+          bf         = excluded.bf,
+          won        = excluded.won,
+          mt         = excluded.mt,
+          r_pat_pts  = excluded.r_pat_pts,
+          b_pat_pts  = excluded.b_pat_pts,
+          r_park_pts = excluded.r_park_pts,
+          b_park_pts = excluded.b_park_pts,
+          r_nav_pts  = excluded.r_nav_pts,
+          b_nav_pts  = excluded.b_nav_pts,
+          updated_at = excluded.updated_at
       `).bind(
         s.match_id, s.season, s.event, s.match, s.rt, s.bt,
         s.rs, s.bs, s.ra, s.ba, s.rtot, s.btot, s.rf, s.bf,
         s.won, s.mt, s.level, s.match_num,
         s.r_pat_pts, s.b_pat_pts, s.r_park_pts, s.b_park_pts,
-        s.r_nav_pts, s.b_nav_pts
+        s.r_nav_pts, s.b_nav_pts,
+        s.updated_at,
       )
     })
     await env.FTC_DB.batch(stmts)
@@ -312,6 +322,7 @@ function serializeRow(row) {
     b_park_pts: row.bParkPts,
     r_nav_pts:  row.rNavPts,
     b_nav_pts:  row.bNavPts,
+    updated_at: new Date().toISOString(),  // wall-clock time of this upsert
   }
 }
 
@@ -559,24 +570,14 @@ export default {
           return json({ rows: [], syncTime, hasChanges: false }, 200, cors)
         }
 
-        // Query D1 directly for rows from active events after the given timestamp.
-        // This is much more efficient than the old "read all, filter in JS" approach.
-        const rawActive = await getMeta(env, 'active_events')
-        const active    = rawActive ? JSON.parse(rawActive) : []
-
-        if (!active.length) {
-          return json({ rows: [], syncTime, hasChanges: false }, 200, cors)
-        }
-
-        // Build a parameterized IN clause for active event codes
-        const placeholders = active.map(() => '?').join(', ')
-        const sinceISO     = new Date(since).toISOString()
-
+        // Filter by updated_at (wall-clock upsert time) rather than mt (match
+        // start time). This ensures matches scored after their start time —
+        // e.g. late score entry, corrections — are always included in deltas.
+        const sinceISO = new Date(since).toISOString()
         const { results } = await env.FTC_DB.prepare(`
           SELECT * FROM match_rows
-          WHERE event IN (${placeholders})
-            AND mt > ?
-        `).bind(...active, sinceISO).all()
+          WHERE updated_at > ?
+        `).bind(sinceISO).all()
 
         const deltaRows = results.map(deserializeRow)
         return json({ rows: deltaRows, syncTime, hasChanges: deltaRows.length > 0 }, 200, cors)
