@@ -4,7 +4,7 @@
 
 // K-factor shape
 const K_RAMP_START   = 3;
-const K_RAMP_END     = 12;
+const K_RAMP_END     = 8;
 const K_PEAK_VAL     = 0.45;
 const K_FLOOR        = 0.57;
 
@@ -39,9 +39,9 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  if (n <= 12)         return 0;
-  else if (n <= 20)    return (1/9)*(n-10);
-  else                 return 1;
+  if (n <= 10)         return 0;
+  else if (n <= 17)    return (3/35)*(n-10);
+  else                 return 0.6;
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
@@ -360,10 +360,6 @@ export function buildEpa(rows, priorRatings = {}) {
 }
 
 // ── Win probability ────────────────────────────────────────
-// Matches reference formula exactly:
-//   d = bSum - rSum  (NO ×400/eloScale factor)
-//   P(red) = 1 / (1 + 10^(d / eloScale))
-//   clamped [0.03, 0.97]
 export function epaWinProb(redTeams, blueTeams, state) {
   const {
     ratings, momentumEpa, matchCounts, autoRatings,
@@ -397,7 +393,7 @@ export function epaWinProb(redTeams, blueTeams, state) {
 
   const scale = Math.max(eloScale || (seasonAvg || 30) * ELO_SCALE_MULTIPLIER, 1);
   const d = bSum - rSum; // direct diff — NO 400/scale factor
-  return Math.max(0.03, Math.min(0.97, 1 / (1 + Math.pow(10, d / scale))));
+  return Math.max(0, Math.min(1, 1 / (1 + Math.pow(10, d / scale))));
 }
 
 // ── Season accuracy ────────────────────────────────────────
