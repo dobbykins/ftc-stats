@@ -40,12 +40,12 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 export function mFactor(n)
 {
   if (n <= 10)         return 0;
-  else if (n <= 17)    return (3/35)*(n-10);
+  else if (n <= 18)    return (5/24)*(n-10);
   else                 return 0.6;
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START);
+  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (K_FLOOR - K_PEAK_VAL) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
   else  return K_PEAK_VAL;
 }
 
