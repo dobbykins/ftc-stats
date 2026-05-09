@@ -39,8 +39,8 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  if (n <= 10)          return 0;
-  else if (n <= 20)    return (1/10)*(n-10);  // matches 12–20 (unchanged shape)
+  if (n <= 12)         return 0;
+  else if (n <= 20)    return (1/9)*(n-10);
   else                 return 1;
 }
 export function kFactor(n) {
@@ -95,36 +95,17 @@ function buildRegionalPriors(rows) {
   }
 
   const regionEarlyAvg = {};
-  // CHANGE 1a: Also compute per-region early AUTO averages from real match data.
-  // Previously autoR[t] was seeded at init * AUTO_PRIOR_FRAC (a fixed 15% guess).
-  // Now we gather actual ra/ba per-robot shares from the same early-event window
-  // used for total EPA priors, so the auto prior reflects observed auto scoring
-  // in this region/season rather than an arbitrary fraction.
-  const regionEarlyAutoAvg = {};
-
   for (const [region, events] of Object.entries(regionEvents)) {
     const earlyEvents = new Set(events.slice(0, REGION_EARLY_EVENTS));
     const perRobot = [];
-    const perRobotAuto = []; // CHANGE 1a
-
     for (const r of rows) {
       const ev = (r.event || '').toUpperCase();
       if (!earlyEvents.has(ev)) continue;
       // only qual matches for regional prior (matches reference guard)
-      if (r.rt?.length) {
-        perRobot.push(r.rs / r.rt.length);
-        // CHANGE 1a: collect auto share per robot where auto data exists
-        if (r.ra != null) perRobotAuto.push(r.ra / r.rt.length);
-      }
-      if (r.bt?.length) {
-        perRobot.push(r.bs / r.bt.length);
-        // CHANGE 1a
-        if (r.ba != null) perRobotAuto.push(r.ba / r.bt.length);
-      }
+      if (r.rt?.length) perRobot.push(r.rs / r.rt.length);
+      if (r.bt?.length) perRobot.push(r.bs / r.bt.length);
     }
-    if (perRobot.length >= 4)     regionEarlyAvg[region]     = mean(perRobot);
-    // CHANGE 1a: require at least 4 samples just like total EPA prior
-    if (perRobotAuto.length >= 4) regionEarlyAutoAvg[region] = mean(perRobotAuto);
+    if (perRobot.length >= 4) regionEarlyAvg[region] = mean(perRobot);
   }
 
   const teamFirstEvent = {}, teamFirstTime = {};
@@ -143,8 +124,7 @@ function buildRegionalPriors(rows) {
   const teamRegion = {};
   for (const [team, ev] of Object.entries(teamFirstEvent)) teamRegion[team] = extractRegion(ev);
 
-  // CHANGE 1a: expose regionEarlyAutoAvg alongside the existing map
-  return { regionEarlyAvg, regionEarlyAutoAvg, teamRegion };
+  return { regionEarlyAvg, teamRegion };
 }
 
 // ── Shrinkage — with MIN=0 and END=0, shrinkEpa returns epa unchanged
@@ -183,18 +163,6 @@ export function buildEpa(rows, priorRatings = {}) {
   }
   const seasonAvg = perRobot.length ? mean(perRobot) : 30;
 
-  // CHANGE 1b: compute a season-wide auto average as the global fallback
-  // for teams whose region has insufficient early-event auto data.
-  // Previously the fallback was always seasonAvg * AUTO_PRIOR_FRAC (15%).
-  const perRobotAuto = [];
-  for (const r of rows) {
-    if (r.rt?.length && r.ra != null) perRobotAuto.push(r.ra / r.rt.length);
-    if (r.bt?.length && r.ba != null) perRobotAuto.push(r.ba / r.bt.length);
-  }
-  const autoSeasonAvg = perRobotAuto.length >= 4
-    ? mean(perRobotAuto)
-    : seasonAvg * AUTO_PRIOR_FRAC; // graceful fallback if auto data is absent
-
   const margins = [];
   for (const r of rows) {
     if (r.rs !== undefined && r.bs !== undefined && r.rs !== r.bs)
@@ -204,8 +172,7 @@ export function buildEpa(rows, priorRatings = {}) {
     ? [...margins].sort((a, b) => a - b)[Math.floor(margins.length * 0.65)]
     : seasonAvg * ELO_SCALE_MULTIPLIER;
 
-  // CHANGE 1a: destructure regionEarlyAutoAvg from buildRegionalPriors
-  const { regionEarlyAvg, regionEarlyAutoAvg, teamRegion } = buildRegionalPriors(rows);
+  const { regionEarlyAvg, teamRegion } = buildRegionalPriors(rows);
 
   const isCareer = priorRatings._isCareer === true;
   const careerPrior = isCareer ? priorRatings.careerPrior : null;
@@ -231,42 +198,14 @@ export function buildEpa(rows, priorRatings = {}) {
     return regionalPrior;
   };
 
-  // CHANGE 1b: mirror of initEpa but for auto EPA specifically.
-  // Uses the real observed auto prior for this team's region, falling back
-  // to autoSeasonAvg (computed from actual ra/ba) rather than a fraction of total.
-  const initAutoEpa = (team) => {
-    const region = teamRegion[team];
-    const regionalAutoPrior = (region && regionEarlyAutoAvg?.[region])
-      ? regionEarlyAutoAvg[region] * REGION_FALLBACK_FRAC
-      : autoSeasonAvg * GLOBAL_FALLBACK_FRAC;
-
-    if (isCareer && careerPrior?.[team] !== undefined) {
-      // Scale the career prior by the auto fraction of this season
-      const autoFrac = seasonAvg > 0 ? autoSeasonAvg / seasonAvg : AUTO_PRIOR_FRAC;
-      const scaledPrior = careerPrior[team] * seasonAvg * autoFrac;
-      return PRIOR_SEASON_WEIGHT * scaledPrior + (1 - PRIOR_SEASON_WEIGHT) * regionalAutoPrior;
-    }
-    if (!isCareer) {
-      const priorRaw = priorRatings[team];
-      if (priorRaw !== undefined && priorSeasonAvg > 0) {
-        const autoFrac = seasonAvg > 0 ? autoSeasonAvg / seasonAvg : AUTO_PRIOR_FRAC;
-        const scaledPrior = priorRaw * (seasonAvg / priorSeasonAvg) * autoFrac;
-        return PRIOR_SEASON_WEIGHT * scaledPrior + (1 - PRIOR_SEASON_WEIGHT) * regionalAutoPrior;
-      }
-    }
-    return regionalAutoPrior;
-  };
-
   const allTeams = new Set();
   for (const r of rows) [...(r.rt || []), ...(r.bt || [])].forEach(t => allTeams.add(t));
 
   for (const t of allTeams) {
-    const init     = initEpa(t);
-    // CHANGE 1b: seed autoR from real data via initAutoEpa, not init * AUTO_PRIOR_FRAC
-    const initAuto = initAutoEpa(t);
+    const init = initEpa(t);
     ratings[t] = init;
-    autoR[t]   = initAuto;
-    dcR[t]     = init - initAuto;
+    autoR[t]   = init * AUTO_PRIOR_FRAC;
+    dcR[t]     = init - autoR[t];
     patR[t]    = init * PATTERN_PRIOR_FRAC;
     parkR[t]   = init * PARK_PRIOR_FRAC;
     mc[t] = 0;
@@ -352,16 +291,14 @@ export function buildEpa(rows, priorRatings = {}) {
     for (let i = 0; i < red.length; i++) {
       const t = red[i];
       const k = kFactor(mcEvent[t] || 0);
-      // CHANGE 1b: initAutoEpa(t) used as the conceptual prior reference;
-      // the actual per-match update is unchanged — still k*(actual - current)
-      const myAutoEpa = autoR[t] ?? initAutoEpa(t);
+      const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (rAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(rAutoShares[i]);
     }
     for (let i = 0; i < blue.length; i++) {
       const t = blue[i];
       const k = kFactor(mcEvent[t] || 0);
-      const myAutoEpa = autoR[t] ?? initAutoEpa(t);
+      const myAutoEpa = autoR[t] ?? initEpa(t) * AUTO_PRIOR_FRAC;
       autoR[t] = Math.min((autoR[t] ?? 0) + k * (bAutoShares[i] - myAutoEpa), ratings[t]);
       autoHistory[t].push(bAutoShares[i]);
     }
