@@ -45,7 +45,7 @@ export function mFactor(n)
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (1/K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START);
+  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR + (1/K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START);
   else if (n > K_RAMP_END) return K_PEAK_VAL;
 }
 
@@ -262,7 +262,6 @@ export function buildEpa(rows, priorRatings = {}) {
 
     const rEA = mean(red.map(t => ratings[t] ?? initEpa(t)));
     const bEA = mean(blue.map(t => ratings[t] ?? initEpa(t)));
-    const m = 0;
 
     for (const t of red)  opponentHistory[t].push(mean(blue.map(tt => ratings[tt] ?? initEpa(tt))));
     for (const t of blue) opponentHistory[t].push(mean(red.map(tt  => ratings[tt] ?? initEpa(tt))));
@@ -390,7 +389,7 @@ export function epaWinProb(redTeams, blueTeams, state) {
     const epa  = Math.max(0, predictionEpa(t));
     const aepa = autoRatings?.[t] ?? epa * AUTO_PRIOR_FRAC;
     const dcEpa = Math.max(0, epa - aepa);
-    return Math.max(0, dcEpa);
+    return Math.max(0, epa);
   };
 
   const rSum = redTeams.reduce((s, t) => s + teamScore(t), 0);
