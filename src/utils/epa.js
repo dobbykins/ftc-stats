@@ -5,7 +5,7 @@
 // K-factor shape
 const K_RAMP_START   = 2;
 const K_RAMP_END     = 5;
-const K_PEAK_VAL     = 0.35;
+const K_PEAK_VAL     = 0.25;
 const K_FLOOR        = 0.65;
 
 const AUTO_PRIOR_FRAC    = 0.15;
