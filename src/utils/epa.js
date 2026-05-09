@@ -5,16 +5,16 @@
 // K-factor shape
 const K_RAMP_START   = 2;
 const K_RAMP_END     = 6;
-const K_PEAK_VAL     = 0.3;
-const K_FLOOR        = 0.5;
+const K_PEAK_VAL     = 0.35;
+const K_FLOOR        = 0.65;
 
 const AUTO_PRIOR_FRAC    = 0.20;
 const PATTERN_PRIOR_FRAC = 0.0;
 const PARK_PRIOR_FRAC    = 0.0;
 
 const REGION_EARLY_EVENTS  = 4;
-const REGION_FALLBACK_FRAC = 0.98;
-const GLOBAL_FALLBACK_FRAC = 0.95;
+const REGION_FALLBACK_FRAC = 0.96;
+const GLOBAL_FALLBACK_FRAC = 1.00;
 const PRIOR_SEASON_WEIGHT  = 0.4;
 
 const AUTO_STABILITY_WINDOW = 0.25;
@@ -39,8 +39,8 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  if (n <= 10)         return 0;
-  else if (n <= 15)    return (1/6)*(n-10);
+  if (n <= 12)         return 0;
+  else if (n <= 36)    return (1/24)*(n-12);
   else                 return 1;
 }
 export function kFactor(n) {
