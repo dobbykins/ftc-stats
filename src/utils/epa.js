@@ -4,8 +4,8 @@
 
 // K-factor shape
 const K_RAMP_START   = 2;
-const K_RAMP_END     = 8;
-const K_PEAK_VAL     = 0.35;
+const K_RAMP_END     = 7;
+const K_PEAK_VAL     = 0.2;
 const K_FLOOR        = 0.65;
 
 const AUTO_PRIOR_FRAC    = 0.20;
@@ -40,7 +40,7 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 export function mFactor(n)
 {
   if (n <= 12)         return 0;
-  else if (n <= 36)    return (1/24)*(n-12);
+  else if (n <= 24)    return (1/12)*(n-12);
   else                 return 1;
 }
 export function kFactor(n) {
