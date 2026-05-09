@@ -45,8 +45,8 @@ export function mFactor(n)
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
-  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR + (1/K_PEAK_VAL - K_FLOOR) * (n - K_RAMP_START);
-  else if (n > K_RAMP_END) return K_PEAK_VAL;
+  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR - (1/30) * (n - K_RAMP_START);
+  else  return K_PEAK_VAL;
 }
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
