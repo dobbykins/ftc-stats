@@ -3,8 +3,8 @@
 // ═══════════════════════════════════════════════════════════
 
 // K-factor shape
-const K_RAMP_START   = 6;
-const K_RAMP_END     = 12;
+const K_RAMP_START   = 2;
+const K_RAMP_END     = 5;
 const K_PEAK_VAL     = 0.3;
 const K_FLOOR        = 0.5;
 
@@ -39,9 +39,9 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  if (n <= 12)         return 0;
-  else if (n <= 36)    return (1/24)*(n-12);
-  else                 return 0.5;
+  if (n <= 10)         return 0;
+  else if (n <= 17)    return (1/7)*(n-10);
+  else                 return 1;
 }
 export function kFactor(n) {
   if (n <= K_RAMP_START)  return K_FLOOR;
