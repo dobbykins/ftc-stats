@@ -39,15 +39,8 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  // CHANGE 2: Earlier m-factor ramp.
-  // Previously returned 0 for all n <= 12, completely disabling the
-  // opponent-quality correction for the first dozen matches of every event.
-  // Now begins ramping at match 4 (instead of 12), so opponent strength
-  // starts influencing updates as soon as ratings have a little data behind
-  // them — exactly when inflated opponents are most likely to mislead.
-  if (n <= 4)          return 0;
-  else if (n <= 12)    return (1/8)*(n-4);   // 0 → 1 over matches 4–12
-  else if (n <= 20)    return (1/9)*(n-10);  // matches 12–20 (unchanged shape)
+  if (n <= 10)          return 0;
+  else if (n <= 20)    return (1/10)*(n-10);  // matches 12–20 (unchanged shape)
   else                 return 1;
 }
 export function kFactor(n) {
