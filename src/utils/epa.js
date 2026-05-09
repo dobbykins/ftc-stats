@@ -3,8 +3,8 @@
 // ═══════════════════════════════════════════════════════════
 
 // K-factor shape
-const K_RAMP_START   = 2;
-const K_RAMP_END     = 5;
+const K_RAMP_START   = 3;
+const K_RAMP_END     = 12;
 const K_PEAK_VAL     = 0.45;
 const K_FLOOR        = 0.65;
 
