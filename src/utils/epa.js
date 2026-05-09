@@ -6,7 +6,7 @@
 const K_RAMP_START   = 3;
 const K_RAMP_END     = 8;
 const K_PEAK_VAL     = 0.45;
-const K_FLOOR        = 0.57;
+const K_FLOOR        = 0.45;
 
 const AUTO_PRIOR_FRAC    = 0.15;
 const PATTERN_PRIOR_FRAC = 0.0;
