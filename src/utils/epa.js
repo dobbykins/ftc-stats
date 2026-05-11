@@ -3,10 +3,10 @@
 // ═══════════════════════════════════════════════════════════
 
 // K-factor shape
-const K_RAMP_START   = 2;
-const K_RAMP_END     = 10;
-const K_PEAK_VAL     = 0.3;
-const K_FLOOR        = 0.3;
+const K_RAMP_START   = 4;
+const K_RAMP_END     = 12;
+const K_PEAK_VAL     = 0.9630;
+const K_FLOOR        = 0.0678;
 
 const AUTO_PRIOR_FRAC    = 0.15;
 const PATTERN_PRIOR_FRAC = 0.0;
@@ -42,7 +42,10 @@ export function mFactor(n)
   return 0;
 }
 export function kFactor(n) {
-    return Math.max(0.643 * (Math.exp(-0.2 * n)) + 0.006, 0.048);
+    if(n <= K_RAMP_START) return K_PEAK_VAL;
+    if(n > K_RAMP_END) return K_FLOOR;
+    const slope = (K_FLOOR - K_PEAK_VAL) / (K_RAMP_END - K_RAMP_START);
+    return K_PEAK_VAL + slope * (n - K_RAMP_START);
 }
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
