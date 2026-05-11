@@ -39,7 +39,7 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  return 2.092 * Math.exp(-4.355 * n) + 0.008;
+  return 0;
 }
 export function kFactor(n) {
     return Math.max(0.643 * (Math.exp(-0.2 * n)) + 0.006, 0.048);
