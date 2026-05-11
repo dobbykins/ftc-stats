@@ -44,7 +44,7 @@ export function mFactor(n)
   else                 return 0;
 }
 export function kFactor(n) {
-    return 0.643 * (Math.exp(-0.2 * n)) + 0.006;
+    return Math.max(0.643 * (Math.exp(-0.2 * n)) + 0.006, 0.05);
 }
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
