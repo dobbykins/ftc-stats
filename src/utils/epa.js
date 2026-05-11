@@ -39,14 +39,12 @@ export const toU = (epa, avg) => avg ? epa / avg : 0;
 
 export function mFactor(n)
 {
-  if (n <= 10)         return 0.2;
-  else if (n <= 18)    return 0.2 + (0.8 / 8) * (n - 10);
-  else                 return 1;
+  if (n <= 10)         return 0;
+  else if (n <= 18)    return 0;
+  else                 return 0;
 }
 export function kFactor(n) {
-  if (n <= K_RAMP_START)  return K_FLOOR;
-  else if (n > K_RAMP_START && n <= K_RAMP_END)    return K_FLOOR + (K_FLOOR - K_PEAK_VAL) * (n - K_RAMP_START) / (K_RAMP_END - K_RAMP_START);
-  else  return K_PEAK_VAL;
+    return 0.643 * (Math.exp(-0.2 * n)) + 0.006;
 }
 
 function epaUpdate(k, m, scoreShare, myEpa, oppShare, oppEpa) {
